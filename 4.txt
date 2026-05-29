@@ -1,0 +1,62 @@
+4
+
+Between use query 
+
+%sql
+SELECT
+count(*)
+FROM
+non_published_analytics.emea_inbound_ilm_derived.landing_mdi_tx_measure_t
+where
+-- SRCCRTTMST BETWEEN '2026-03-03T00:00:13.000+00:00' and '2026-03-03T23:58:55.000+00:00';
+-- SRCCRTTMST BETWEEN '2026-03-03 00:00:13.000000' and '2026-03-03 23:58:55.000000';
+SRCCRTTMST BETWEEN '2026-03-03 00:00:13.464471' and '2026-03-03 23:58:55.030725'
+
+
+Record count based on date
+
+%sql
+select count(*) from development.personal_emea_ilm_ashish.mdi_note where SRCCRTTMST > '2026-03-01 00:00:12.526921';
+
+Date range check
+
+%sql
+SELECT
+count(*)
+FROM
+non_published_analytics.emea_inbound_ilm_derived.landing_mdi_tx_line_measure_t
+where
+coalesce(SRCUPDTTMST, SRCCRTTMST, LAST_MODIFIED_DATE) > '2026-03-01 00:00:00.000000' and coalesce(SRCUPDTTMST,SRCCRTTMST,LAST_MODIFIED_DATE) <='2026-03-02 10:09:11.350798';
+
+
+Shallow clone of metadata->table
+
+source_db = "non_published_analytics.emea_inbound_fulfillment_derived"
+target_db = "development.personal_emea_inbound_jdwive"
+
+tables_df = spark.sql(f"SHOW TABLES IN {source_db}")
+table_names = [row.tableName for row in tables_df.collect()]
+table_names
+
+
+for table_name in table_names:
+source_table = f"{source_db}.{table_name}"
+target_table = f"{target_db}.{table_name}"
+
+if spark.catalog.tableExists(target_table):
+print(f"Table {target_table} already exists. Skipping.")
+continue
+
+# Use SHALLOW CLONE to copy only the schema (metadata)
+clone_query = f"CREATE TABLE {target_table} SHALLOW CLONE {source_table}"
+spark.sql(clone_query)
+print(f"Schema copied for table: {table_name}")
+
+
+
+
+
+
+
+
+

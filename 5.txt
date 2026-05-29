@@ -1,0 +1,1845 @@
+5
+
+Summary report for all the table:
+
+# -----------------------------------------------------------------------------
+# CONFIG
+# -----------------------------------------------------------------------------
+configs = {
+"date_from": "2026-03-01",
+"date_to": "2026-03-07",
+"dev_catalog": "development",
+"dev_schema": "personal_emea_ilm_ashish",
+"prd_catalog": "non_published_analytics",
+"prd_schema": "emea_inbound_ilm_derived"
+}
+
+configs["configs"] =[
+{
+"dev_table": "mdi_tx_measure",
+"prd_table": "landing_mdi_tx_measure_t",
+"common_columns": [
+"SOURCE_OF_DATA",
+"VALUE",
+"MEASURE_SEQ_NUM",
+"ACTVIND",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"LAST_MODIFIED_BY",
+"ALT_KEY_TX",
+"TX_ID",
+"MEASURE_TYPE",
+"SRCUPDTTMST",
+"RELATED_TX_KEY",
+"RELATED_TX_TYPE",
+"MEASURE_CODE",
+"SRCCRTTMST",
+"TX_TYPE",
+"CREATED_BY",
+"UOM",
+"ORG_CODE",
+"ALT_KEY_MEASURE"
+],
+"primary_columns": [
+"ORG_CODE",
+"TX_TYPE",
+"ALT_KEY_TX",
+"ALT_KEY_MEASURE"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+},
+{
+"dev_table": "mdi_tx_matrix",
+"prd_table": "landing_mdi_tx_matrix_t",
+"common_columns": [
+"PRICE_EXTENDED",
+"TABLE_NAME",
+"SOURCE_OF_DATA",
+"REF_LINE_ID",
+"REF_LINE_KEY",
+"ACTVIND",
+"CREATED_DATE",
+"LAST_MODIFIED_BY",
+"ALT_KEY_TX",
+"MATRIX_ID",
+"TX_ID",
+"REF_TX_ID",
+"ALT_KEY_MATRIX",
+"COMMERCIAL_UOM",
+"CUSTOMS_PRICE_EXTENDED",
+"LINE_ID",
+"REF_TABLE_NAME",
+"LINE_KEY",
+"QUANTITY",
+"REF_TX_TYPE",
+"SRCUPDTTMST",
+"REF_TX_ORG_CODE",
+"SRCCRTTMST",
+"TX_TYPE",
+"CURRENCY_CODE",
+"REF_TX_VERSION_NUM",
+"CREATED_BY",
+"REF_TX_KEY",
+"ORG_CODE",
+"LAST_MODIFIED_DATE"
+],
+"primary_columns": [
+"ORG_CODE",
+"TX_TYPE",
+"TX_ID",
+"MATRIX_ID",
+"ALT_KEY_TX",
+"ALT_KEY_MATRIX"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+},
+{
+"dev_table": "mdi_tx_location",
+"prd_table": "landing_mdi_tx_location_t",
+"common_columns": [
+"SOURCE_OF_DATA",
+"ALT_KEY_LOCATION",
+"LOCATION_CODE",
+"LOCATION_QUALIFIER",
+"LOCATION_TYPE",
+"ACTVIND",
+"CREATED_DATE",
+"LAST_MODIFIED_BY",
+"ALT_KEY_TX",
+"TX_ID",
+"MASTER_PARTNER_KEY",
+"SRCUPDTTMST",
+"LOCATION_STD_CODE",
+"SRCCRTTMST",
+"TX_TYPE",
+"LOCATION_NAME",
+"CREATED_BY",
+"LOCATION_ID",
+"ORG_CODE",
+"LAST_MODIFIED_DATE"
+],
+"primary_columns": [
+"ORG_CODE",
+"TX_TYPE",
+"TX_ID",
+"ALT_KEY_TX",
+"ALT_KEY_LOCATION"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+},
+{
+"dev_table": "mdi_tx_line_measure",
+"prd_table": "landing_mdi_tx_line_measure_t",
+"common_columns": [
+"SOURCE_OF_DATA",
+"meta_load_tmst",
+"VALUE",
+"MEASURE_SEQ_NUM",
+"ACTVIND",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"LAST_MODIFIED_BY",
+"ALT_KEY_TX",
+"TX_ID",
+"MEASURE_TYPE",
+"LINE_ID",
+"SRCUPDTTMST",
+"RELATED_LINE_KEY",
+"RELATED_TX_KEY",
+"RELATED_TX_TYPE",
+"MEASURE_CODE",
+"SRCCRTTMST",
+"TX_TYPE",
+"CREATED_BY",
+"ALT_KEY_LINE",
+"UOM",
+"ORG_CODE",
+"ALT_KEY_MEASURE"
+],
+"primary_columns": [
+"ORG_CODE",
+"TX_TYPE",
+"ALT_KEY_TX",
+"ALT_KEY_LINE",
+"ALT_KEY_MEASURE"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND",
+"meta_load_tmst"
+]
+},
+{
+"dev_table": "mdi_tx_line_event",
+"prd_table": "landing_mdi_tx_line_event_t",
+"common_columns": [
+"REQUESTED_PLACE_CODE",
+"SCHEDULED_PLACE_STD_CODE",
+"SOURCE_OF_DATA",
+"EVENT_TIME",
+"ACTUAL_REPORTED_PTNR_KEY",
+"REQUESTED_REPORTED_TIME",
+"ESTIMATED_SOURCE",
+"ESTIMATED_PLACE_STD_CODE",
+"ACTUAL_VESSEL",
+"ESTIMATED_PLACE_NAME",
+"REQUESTED_EARLY_TIME_STZ",
+"ESTIMATED_PLACE_CODE",
+"DATA_PROVIDER",
+"REQUESTED_LATE_TIME_STZ",
+"EVENT_TIME_STZ",
+"ACTVIND",
+"PLACE_STD_CODE",
+"EVENT_SEQ_NUM",
+"ACTUAL_PLACE_NAME",
+"CREATED_DATE",
+"SCHEDULED_VOYAGE_FLIGHT",
+"ALT_KEY_TX",
+"REQUESTED_PLACE_NAME",
+"SCHEDULED_VESSEL",
+"LAST_MODIFIED_BY",
+"SCHEDULED_EARLY_TIME",
+"ESTIMATED_EARLY_TIME",
+"TX_ID",
+"ESTIMATED_REPORTED_PTNR_KEY",
+"EVENT_TYPE",
+"ACTUAL_PLACE_QUALIFIER",
+"SCHEDULED_REPORTED_TIME_STZ",
+"ESTIMATED_EARLY_TIME_STZ",
+"LINE_ID",
+"ACTUAL_TIME_STZ",
+"PLACE_NAME",
+"REQUESTED_REPORTED_TIME_STZ",
+"PTNR_KEY",
+"PLACE_QUALIFIER",
+"REQUESTED_REPORTED_PTNR_KEY",
+"ESTIMATED_PLACE_QUALIFIER",
+"REQUESTED_LATE_TIME",
+"EVENT_CODE",
+"ACTUAL_PLACE_STD_CODE",
+"ACTUAL_PLACE_CODE",
+"SRCUPDTTMST",
+"REQUESTED_EARLY_TIME",
+"SCHEDULED_PLACE_NAME",
+"ALT_KEY_EVENT",
+"ACTUAL_TIME",
+"ESTIMATED_LATE_TIME_STZ",
+"ACTUAL_REPORTED_TIME_STZ",
+"SRCCRTTMST",
+"TX_TYPE",
+"ACTUAL_SOURCE",
+"SCHEDULED_PLACE_QUALIFIER",
+"SCHEDULED_LATE_TIME_STZ",
+"SCHEDULED_EARLY_TIME_STZ",
+"SCHEDULED_REPORTED_TIME",
+"CREATED_BY",
+"ALT_KEY_LINE",
+"ACTUAL_REPORTED_TIME",
+"SCHEDULED_PLACE_CODE",
+"ESTIMATED_REPORTED_TIME_STZ",
+"REQUESTED_PLACE_STD_CODE",
+"PLACE_CODE",
+"ACTUAL_VOYAGE_FLIGHT",
+"REQUESTED_SOURCE",
+"SCHEDULED_SOURCE",
+"ESTIMATED_REPORTED_TIME",
+"ORG_CODE",
+"SCHEDULED_LATE_TIME",
+"REQUESTED_PLACE_QUALIFIER",
+"SCHEDULED_REPORTED_PTNR_KEY",
+"ESTIMATED_LATE_TIME",
+"LAST_MODIFIED_DATE"
+],
+"primary_columns": [
+"ORG_CODE",
+"TX_TYPE",
+"TX_ID",
+"LINE_ID",
+"EVENT_SEQ_NUM",
+"ALT_KEY_TX",
+"ALT_KEY_LINE",
+"ALT_KEY_EVENT"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+},
+{
+"dev_table": "mdi_tx_line_de",
+"prd_table": "landing_mdi_tx_line_de_t",
+"common_columns": [
+"FLEXFIELD_VAR11",
+"FLEXFIELD_TIMESTAMP4_STZ",
+"FLEXFIELD_TIMESTAMP7_STZ",
+"FLEXFIELD_VAR15",
+"FLEXFIELD_VAR25",
+"FLEXFIELD_DATE6",
+"FLEXFIELD_NOTE3",
+"FLEXFIELD_VAR7",
+"FLEXFIELD_TIMESTAMP9_STZ",
+"ALT_KEY_TX",
+"FLEXFIELD_VAR21",
+"FLEXFIELD_VAR8",
+"FLEXFIELD_NUM1",
+"RESOURCE_CORELATION_KEY",
+"FLEXFIELD_NUM4",
+"FLEXFIELD_VAR18",
+"FLEXFIELD_NUM3",
+"SRCCRTTMST",
+"TX_TYPE",
+"FLEXFIELD_NUM6",
+"FLEXFIELD_TIMESTAMP1",
+"ORG_CODE",
+"FLEXFIELD_TIMESTAMP3",
+"FLEXFIELD_TIMESTAMP4",
+"SOURCE_OF_DATA",
+"FLEXFIELD_VAR13",
+"SEQ_NUM",
+"FLEXFIELD_TIMESTAMP2",
+"FLEXFIELD_NOTE2",
+"FLEXFIELD_NUM8",
+"FLEXFIELD_VAR12",
+"FLEXFIELD_NUM9",
+"ACTVIND",
+"FLEXFIELD_NUM10",
+"TX_ID",
+"FLEXFIELD_VAR4",
+"FLEXFIELD_TIMESTAMP10",
+"FLEXFIELD_DATE1",
+"GROUP_NAME",
+"FLEXFIELD_VAR16",
+"FLEXFIELD_TIMESTAMP9",
+"FLEXFIELD_VAR10",
+"FLEXFIELD_DATE4",
+"FLEXFIELD_TIMESTAMP6",
+"ALT_KEY_LINE",
+"FLEXFIELD_NOTE4",
+"FLEXFIELD_DATE7",
+"FLEXFIELD_VAR24",
+"FLEXFIELD_VAR1",
+"FLEXFIELD_NUM5",
+"FLEXFIELD_VAR19",
+"FLEXFIELD_NUM2",
+"FLEXFIELD_TIMESTAMP5",
+"LAST_MODIFIED_BY",
+"FLEXFIELD_TIMESTAMP2_STZ",
+"FLEXFIELD_DATE5",
+"LINE_ID",
+"FLEXFIELD_VAR3",
+"FLEXFIELD_VAR20",
+"FLEXFIELD_DATE8",
+"FLEXFIELD_NOTE5",
+"FLEXFIELD_TIMESTAMP5_STZ",
+"CREATED_BY",
+"FLEXFIELD_NUM7",
+"FLEXFIELD_TIMESTAMP3_STZ",
+"FLEXFIELD_DATE9",
+"LAST_MODIFIED_DATE",
+"FLEXFIELD_TIMESTAMP7",
+"FLEXFIELD_VAR14",
+"FLEXFIELD_TIMESTAMP8",
+"FLEXFIELD_TIMESTAMP6_STZ",
+"CREATED_DATE",
+"FLEXFIELD_DATE2",
+"FLEXFIELD_DATE3",
+"SRCUPDTTMST",
+"FLEXFIELD_TIMESTAMP1_STZ",
+"FLEXFIELD_VAR6",
+"FLEXFIELD_VAR17",
+"FLEXFIELD_VAR5",
+"FLEXFIELD_TIMESTAMP8_STZ",
+"FLEXFIELD_VAR9",
+"FLEXFIELD_VAR2",
+"FLEXFIELD_TIMESTAMP10_STZ",
+"FLEXFIELD_VAR23",
+"PARENT_SEQ_NUM",
+"FLEXFIELD_DATE10",
+"FLEXFIELD_NOTE1",
+"FLEXFIELD_VAR22"
+],
+"primary_columns": [
+"ORG_CODE",
+"TX_TYPE",
+"TX_ID",
+"LINE_ID",
+"SEQ_NUM",
+"PARENT_SEQ_NUM",
+"GROUP_NAME",
+"ALT_KEY_TX",
+"ALT_KEY_LINE"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+},
+{
+"dev_table": "mdi_tx_line_date",
+"prd_table": "landing_mdi_tx_line_date_t",
+"common_columns": [
+"SOURCE_OF_DATA",
+"ACTVIND",
+"CREATED_DATE",
+"LAST_MODIFIED_BY",
+"ALT_KEY_TX",
+"TX_ID",
+"DATE_TYPE",
+"LINE_ID",
+"SRCUPDTTMST",
+"SRCCRTTMST",
+"TX_TYPE",
+"DATE_ID",
+"CREATED_BY",
+"ALT_KEY_LINE",
+"ALT_KEY_DATE",
+"DATE_VALUE_STZ",
+"ORG_CODE",
+"DATE_VALUE",
+"LAST_MODIFIED_DATE"
+],
+"primary_columns": [
+"ORG_CODE",
+"TX_TYPE",
+"ALT_KEY_TX",
+"ALT_KEY_LINE",
+"ALT_KEY_DATE"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+},
+{
+"dev_table": "mdi_tx_line",
+"prd_table": "landing_mdi_tx_line_t",
+"common_columns": [
+"FINAL_DSCN_ISSUE",
+"PRO_NUM",
+"LINE_SEQ_NUM",
+"PORT_OF_UNLADING_QUALIFIER",
+"IS_PZA_QUALIFIED",
+"LINE_TYPE",
+"PORT_OF_EXPORT_QUALIFIER",
+"PORT_OF_LADING_NAME",
+"PORT_OF_UNLADING_STD_CODE",
+"SOURCE_PO_VERSION_NUM",
+"IS_HAZARDOUS",
+"CTRY_OF_FABRICATION",
+"AREA",
+"EX_MANUAL_HOLD_REASON_CODE",
+"SWPM_FLAG",
+"PORT_OF_LADING_QUALIFIER",
+"NATIONALITY_OF_INTRANSITVESSEL",
+"VARIANT_GROUP",
+"PORT_OF_ARRIVAL_STD_CODE",
+"ALT_KEY_TX",
+"VENDOR_STOCK_NUMBER",
+"ENTRY_LINE_NUM",
+"EX_STATUS",
+"LOG_MANUAL_HOLD",
+"IM_REVIEW_FLAG",
+"MODEL_DESCRIPTION",
+"SOURCE_TX_VERSION_NUM",
+"PTNR_SOURCE_SYSTEM",
+"HOUSE_AIR_WAYBILL",
+"PORT_OF_ENTRY_CODE",
+"QUANTITY_PER",
+"COMMERCIAL_UOM",
+"EST_DEPARTURE_DATE_STZ",
+"PORT_OF_DEPARTURE_NAME",
+"SIMA_CODE",
+"EXCLUDE_FOR_CONSOLIDATION",
+"IS_CUSTOMS_PRICE_FROM_SRC",
+"PAYMENT_PREPAID_COLLECT",
+"MANUFACTURER_KEY",
+"BRAND_NAME",
+"NET_WEIGHT",
+"END_USE_CODE",
+"SPECIAL_HANDLING",
+"MASTER_AIR_WAYBILL",
+"RESOURCE_SELLER_KEY",
+"PORT_OF_ENTRY_QUALIFIER",
+"SOURCE_LINE_CURRENCY",
+"CONSOLIDATED_GROUP_VALUE",
+"MARKS_AND_NUMBER",
+"INCOTERM_CODE",
+"ENTRY_DATE",
+"IM_MANUAL_HOLD_REMARKS",
+"TX_TYPE",
+"PROCESS_PRIORITY",
+"BATCH_ID",
+"RECEIVED_DATE_STZ",
+"LAST_ACCEPT_DATE",
+"SRCCRTTMST",
+"LOG_MANUAL_HOLD_REASON_CODE",
+"MODE_OF_TRANSPORT_CODE",
+"HOUSE_BILL_OF_LADING",
+"AIR_WAYBILL",
+"VOYAGE_OR_FLT_NUM",
+"BUYER_PRODUCT_ID",
+"EST_LADING_DATE",
+"SELLER_KEY",
+"DEPARTURE_DATE",
+"NUMBER_UOM",
+"EX_COMPLIANCE_DATE",
+"MAKE_BUY_FLAG",
+"SOURCE_LINE_VALUE",
+"QUANTITY_RECEIVED_UOM",
+"UPC_CODE",
+"VARIANT_ID",
+"BOM_ID",
+"ORG_CODE",
+"SRC_CONFIG_ID",
+"IS_PRICE_FROM_SRC",
+"WIDTH",
+"PRICE_EXTENDED",
+"GROSS_VOLUME",
+"IS_SF_QUALIFIED",
+"EST_SHIP_DATE_STZ",
+"ENTRY_DATE_STZ",
+"SWPM_COO",
+"SITE_ID",
+"LOG_STATUS",
+"SOURCE_OF_DATA",
+"ICC_RESULTS",
+"PORT_OF_ENTRY_NAME",
+"PRICE_UNIT",
+"LOG_REVIEW_REASON_CODE",
+"PERCENTAGE_OF_TOT_VALUE",
+"CTRY_OF_MANUFACTURE",
+"BOOKING_REFERENCE_NUM",
+"HUB",
+"PRODUCT_CATEGORY",
+"PROMOTIONAL_OR_SAMPLE_FLAG",
+"UNLADING_DATE_STZ",
+"MODE_OF_TRANSPORT",
+"PORT_OF_ENTRY_STD_CODE",
+"ACTVIND",
+"ICC_RESULT_ID",
+"STATE_OF_ORIGIN",
+"PRICE_ID",
+"MODE_OF_TRANSPORT_QUALIFIER",
+"MODE_OF_SHIP_CD",
+"TX_ID",
+"BOM_ORG_CODE",
+"PROD_ID",
+"SUPPLIER_KEY",
+"PORT_OF_ARRIVAL_CODE",
+"FORWARDER_CARGO_RECEIPT_NUM",
+"MASTER_PROD_KEY",
+"SUPPLIER_PRODUCT_ID",
+"VISA_NUM",
+"MODE_OF_TRANSPORT_STD_CODE",
+"SHIPMENT_TYPE_CD",
+"COMMON_NAME",
+"AREA_UOM",
+"DEPARTURE_DATE_STZ",
+"EST_UNLADING_DATE",
+"PRICE_FROM_SRC_KEY",
+"LC_ISSUANCE_DATE",
+"MODEL_NUM",
+"BUSINESS_UNIT",
+"VOLUME_UOM",
+"SUB_HOUSE_BILL_OF_LADING",
+"TOTAL_LINE_COST",
+"IM_STATUS",
+"IS_KIT_PRODUCT",
+"SOURCE_PROD_ID",
+"MISC_MEASURES",
+"DEPARTMENT",
+"CURRENCY_CODE",
+"IS_EXPORT_FILING_QUALIFIED",
+"SHIP_DATE",
+"GROSS_WEIGHT",
+"ALT_KEY_LINE",
+"ESSENTIAL_CHARACTER",
+"SOURCE_PARENT_LINE_NUM",
+"MASTER_PRICE_KEY",
+"SHIP_DATE_STZ",
+"EXPORT_DATE_STZ",
+"SOURCE_TX_ID",
+"EX_REVIEW_REASON_CODE",
+"LOG_MANUAL_HOLD_REMARKS",
+"LC_EXPIRATION_DATE",
+"LOG_REVIEW_REMARKS",
+"MASTER_BILL_OF_LADING",
+"DOMESTIC_COMPONENT_UNIT_VALUE",
+"IN_TRANSIT_NUM",
+"RESOURCE_MANUFACTURER_KEY",
+"DIMENSIONAL_WEIGHT",
+"PROD_COLOR",
+"WAGON_NUMBER",
+"CTRY_OF_IMPORT",
+"IS_ROLLEDUP_LINE",
+"LENGTH",
+"CATEGORY",
+"NUM_OF_PIECES",
+"UNLADING_DATE",
+"PARENT_LINE_KEY",
+"IS_SERIALIZED",
+"SOURCE_SYSTEM",
+"DOMESTIC_COMPONENT_UNIT_CURR",
+"EST_ENTRY_DATE",
+"CTRY_OF_ASSEMBLY",
+"DESTINATION_EST_ARRIVAL_DT",
+"POWER",
+"EST_LADING_DATE_STZ",
+"BILL_OF_LADING",
+"EX_MANUAL_HOLD",
+"ADMISS_CONCERN",
+"SRC_ID",
+"IS_LVS_QUALIFIED",
+"IM_REVIEW_REMARKS",
+"LAST_MODIFIED_BY",
+"SOURCE_CREATED_DATE",
+"IS_ACTIVE",
+"DO_NOT_SOLICIT",
+"DIVISION",
+"LC_NUMBER",
+"SOURCE_CREATED_DATE_STZ",
+"PORT_OF_LADING_CODE",
+"PROD_SUB_FAMILY",
+"RECONCILIATION_FLAG",
+"LADING_DATE_STZ",
+"IM_MANUAL_HOLD_REASON_CODE",
+"LINE_ID",
+"IM_MANUAL_HOLD",
+"ACTUAL_VALUE_PAID",
+"QUANTITY",
+"EST_SHIP_DATE",
+"PROD_STYLE",
+"RETAIL_PRICE_UNIT",
+"EST_ENTRY_DATE_STZ",
+"SCAC_OR_IATA",
+"CTRY_OF_ORIGIN",
+"PROMOTIONAL_OR_SAMPLE_TYPE",
+"IMPORT_REASON_CODE",
+"PROD_DESCRIPTION",
+"VESSEL_OPERATOR",
+"LINE_STATE",
+"UCR_NUM",
+"EST_UNLADING_DATE_STZ",
+"PROD_DESCRIPTION_2",
+"PORT_OF_DEPARTURE_STD_CODE",
+"IS_BP_QUALIFIED",
+"CREATED_BY",
+"PORT_OF_UNLADING_NAME",
+"DESTINATION_EST_ARRIVAL_DT_STZ",
+"LAST_ACCEPT_DATE_STZ",
+"CLASS_QUESTIONNAIRE_ID",
+"RECEIVED_DATE",
+"VOLUME",
+"LAST_MODIFIED_DATE",
+"TAX_ID",
+"PORT_OF_EXPORT_NAME",
+"SOURCE_LINE_NUM",
+"PROD_DESCRIPTION_COMPLIANCE",
+"MASTER_SRC_KEY",
+"RETAIL_PRICE_UNIT_CUR_CODE",
+"ARRIVAL_DATE_STZ",
+"IMPORT_REASON_CODE_DESC",
+"WEIGHT_UOM",
+"IS_REVISED",
+"LOG_REVIEW_FLAG",
+"QUANTITY_RECEIVED_DAMAGED",
+"BOM_KEY",
+"EST_DEPARTURE_DATE",
+"DUTIABLE_VALUE",
+"SUB_BUSINESS_UNIT",
+"CREATED_DATE",
+"HEIGHT",
+"PORT_OF_LADING_STD_CODE",
+"EX_REVIEW_FLAG",
+"DETERMINED_CTRY_OF_EXPORT",
+"SOURCE_PO_LINE_NUM",
+"PORT_OF_EXPORT_CODE",
+"NATIONALITY_OF_VESSEL",
+"INCOTERM_PLACE",
+"EX_REVIEW_REMARKS",
+"MISC_MEASURES_UOM",
+"PORT_OF_ARRIVAL_QUALIFIER",
+"CUSTOMS_PRICE_EXTENDED",
+"PORT_OF_EXPORT_STD_CODE",
+"RESOURCE_SUPPLIER_KEY",
+"CTRY_OF_EXPORT",
+"RECEIVER_ID",
+"CONS_BUS_ATTR_CHECK_SUM",
+"QUANTITY_RECEIVED",
+"EXTENDED_RETAIL_PRICE",
+"SRCUPDTTMST",
+"POWER_UOM",
+"PORT_OF_UNLADING_CODE",
+"IS_PCE_QUALIFIED",
+"BONDED_STATUS",
+"IM_REVIEW_REASON_CODE",
+"DIMENSION_UOM",
+"PROD_SIZE",
+"SPECIFICATIONS",
+"ACTUAL_VALUE_PAID_CURRENCY",
+"EXPORT_DATE",
+"CUSTOMS_PRICE_UNIT",
+"PORT_OF_DEPARTURE_CODE",
+"PORT_OF_DEPARTURE_QUALIFIER",
+"PROD_ORG_CODE",
+"IM_COMPLIANCE_DATE",
+"ARRIVAL_DATE",
+"IS_INBOND_QUALIFIED",
+"VESSEL_NAME",
+"LADING_DATE",
+"PROD_FAMILY",
+"DETERMINED_CTRY_OF_IMPORT",
+"EX_MANUAL_HOLD_REMARKS",
+"SOURCE_PO_NUM",
+"SOURCE_PACKAGE_NO",
+"CONS_CRITERIA_CHECK_SUM",
+"CONS_GRP_KEY",
+"PROD_SOURCE_SYSTEM",
+"MASTER_VARIANT_KEY",
+"FUTURE_DSCN_ISSUE",
+"LOWEST_LINE_COST",
+"PORT_OF_ARRIVAL_NAME",
+"CONSOLIDATION_METHOD"
+],
+"primary_columns": [
+"ORG_CODE",
+"TX_TYPE",
+"TX_ID",
+"LINE_ID",
+"ALT_KEY_TX",
+"ALT_KEY_LINE",
+"LINE_SEQ_NUM",
+"LINE_TYPE"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+},
+{
+"dev_table": "mdi_tx_event",
+"prd_table": "landing_mdi_tx_event_t",
+"common_columns": [
+"ACTUAL_REPORTED_PTNR_KEY",
+"REQUESTED_REPORTED_TIME",
+"REQUESTED_PLACE_LONGITUDE",
+"REQUESTED_PLACE_LATITUDE",
+"DATA_PROVIDER",
+"PLACE_STD_CODE",
+"ALT_KEY_TX",
+"REQUESTED_PLACE_NAME",
+"ACTUAL_PLACE_LATITUDE",
+"ACTUAL_VOYAGE_FLIGHT",
+"REQUESTED_REPORTED_TIME_STZ",
+"ALT_KEY_EVENT",
+"SRCCRTTMST",
+"TX_TYPE",
+"SCHEDULED_LATE_TIME_STZ",
+"SCHEDULED_PLACE_CODE",
+"PLACE_CODE",
+"ORG_CODE",
+"SCHEDULED_REPORTED_PTNR_KEY",
+"SOURCE_OF_DATA",
+"EVENT_TIME",
+"ESTIMATED_SOURCE",
+"ACTUAL_VESSEL",
+"ESTIMATED_PLACE_CODE",
+"EST_INCR_START_DATE",
+"ACTVIND",
+"EVENT_SEQ_NUM",
+"SCHEDULED_VOYAGE_FLIGHT",
+"ESTIMATED_EARLY_TIME",
+"TX_ID",
+"ESTIMATED_REPORTED_PTNR_KEY",
+"ESTIMATED_EARLY_TIME_STZ",
+"ACTUAL_TIME_STZ",
+"PLACE_NAME",
+"ACTUAL_PLACE_CODE",
+"ACTUAL_PLACE_STD_CODE",
+"ESTIMATED_PLACE_QUALIFIER",
+"ESTIMATED_PLACE_LATITUDE",
+"ACTUAL_REPORTED_TIME_STZ",
+"ACTUAL_SOURCE",
+"PLACE_LONGITUDE",
+"REQUESTED_PLACE_STD_CODE",
+"SCHEDULED_SOURCE",
+"ESTIMATED_REPORTED_TIME",
+"REQUESTED_PLACE_CODE",
+"ESTIMATED_PLACE_STD_CODE",
+"ESTIMATED_PLACE_NAME",
+"ACTUAL_PLACE_NAME",
+"LAST_MODIFIED_BY",
+"SCHEDULED_VESSEL",
+"EST_INCR_END_DATE",
+"SCHEDULED_EARLY_TIME",
+"SCHEDULED_PLACE_LATITUDE",
+"SCHEDULED_REPORTED_TIME_STZ",
+"PTNR_KEY",
+"REQUESTED_REPORTED_PTNR_KEY",
+"ACTUAL_TIME",
+"ESTIMATED_LATE_TIME_STZ",
+"CREATED_BY",
+"ACTUAL_REPORTED_TIME",
+"ESTIMATED_REPORTED_TIME_STZ",
+"SCHEDULED_PLACE_QUALIFIER",
+"REQUESTED_EARLY_TIME",
+"REQUESTED_PLACE_QUALIFIER",
+"LAST_MODIFIED_DATE",
+"SCHEDULED_PLACE_STD_CODE",
+"SCHEDULED_PLACE_LONGITUDE",
+"PLACE_LATITUDE",
+"REQUESTED_EARLY_TIME_STZ",
+"REQUESTED_LATE_TIME_STZ",
+"EVENT_TIME_STZ",
+"CREATED_DATE",
+"EVENT_TYPE",
+"ACTUAL_PLACE_QUALIFIER",
+"REQUESTED_SOURCE",
+"PLACE_QUALIFIER",
+"REQUESTED_LATE_TIME",
+"EVENT_CODE",
+"SRCUPDTTMST",
+"SCHEDULED_PLACE_NAME",
+"ACTUAL_PLACE_LONGITUDE",
+"ESTIMATED_PLACE_LONGITUDE",
+"SCHEDULED_EARLY_TIME_STZ",
+"SCHEDULED_REPORTED_TIME",
+"SCHEDULED_LATE_TIME",
+"ESTIMATED_LATE_TIME"
+],
+"primary_columns": [
+"ORG_CODE",
+"TX_TYPE",
+"TX_ID",
+"EVENT_SEQ_NUM",
+"ALT_KEY_TX",
+"ALT_KEY_EVENT"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+},
+{
+"dev_table": "mdi_pack_measure",
+"prd_table": "landing_mdi_pack_measure_t",
+"common_columns": [
+"VALUE",
+"MEASURE_SEQ_NUM",
+"CREATED_BY",
+"ACTVIND",
+"ALT_KEY_PACK",
+"CREATED_DATE",
+"LAST_MODIFIED_BY",
+"SOURCE_OF_DATA",
+"SRCUPDTTMST",
+"UOM",
+"ORG_CODE",
+"ALT_KEY_MEASURE",
+"MEASURE_CODE",
+"MEASURE_TYPE",
+"SRCCRTTMST",
+"PACK_ID",
+"LAST_MODIFIED_DATE"
+],
+"primary_columns": [
+"ORG_CODE",
+"ALT_KEY_PACK",
+"ALT_KEY_MEASURE"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+},
+{
+"dev_table": "mdi_pack_event",
+"prd_table": "landing_mdi_pack_event_t",
+"common_columns": [
+"ACTUAL_REPORTED_PTNR_KEY",
+"REQUESTED_REPORTED_TIME",
+"REQUESTED_PLACE_LONGITUDE",
+"REQUESTED_PLACE_LATITUDE",
+"DATA_PROVIDER",
+"PLACE_STD_CODE",
+"REQUESTED_PLACE_NAME",
+"ACTUAL_PLACE_LATITUDE",
+"ACTUAL_VOYAGE_FLIGHT",
+"REQUESTED_REPORTED_TIME_STZ",
+"IS_DEMURRAGE_ORIG_START_EVENT",
+"ALT_KEY_EVENT",
+"IS_DETENTION_DEST_START_EVENT",
+"SRCCRTTMST",
+"SCHEDULED_LATE_TIME_STZ",
+"SCHEDULED_PLACE_CODE",
+"PLACE_CODE",
+"ORG_CODE",
+"SCHEDULED_REPORTED_PTNR_KEY",
+"IS_DETENTION_ORIG_END_EVENT",
+"ALT_KEY_PACK",
+"SOURCE_OF_DATA",
+"EVENT_TIME",
+"ESTIMATED_SOURCE",
+"ACTUAL_VESSEL",
+"ESTIMATED_PLACE_CODE",
+"IS_DETENTION_DEST_END_EVENT",
+"ACTVIND",
+"EVENT_SEQ_NUM",
+"SCHEDULED_VOYAGE_FLIGHT",
+"IS_CHASSIS_DEST_START_EVENT",
+"ESTIMATED_EARLY_TIME",
+"ESTIMATED_REPORTED_PTNR_KEY",
+"ESTIMATED_EARLY_TIME_STZ",
+"ACTUAL_TIME_STZ",
+"PLACE_NAME",
+"ACTUAL_PLACE_CODE",
+"ACTUAL_PLACE_STD_CODE",
+"ESTIMATED_PLACE_QUALIFIER",
+"ESTIMATED_PLACE_LATITUDE",
+"ACTUAL_REPORTED_TIME_STZ",
+"ACTUAL_SOURCE",
+"PLACE_LONGITUDE",
+"REQUESTED_PLACE_STD_CODE",
+"SCHEDULED_SOURCE",
+"ESTIMATED_REPORTED_TIME",
+"REQUESTED_PLACE_CODE",
+"ESTIMATED_PLACE_STD_CODE",
+"IS_DETENTION_ORIG_START_EVENT",
+"ESTIMATED_PLACE_NAME",
+"ACTUAL_PLACE_NAME",
+"LAST_MODIFIED_BY",
+"IS_CHASSIS_ORIG_START_EVENT",
+"SCHEDULED_VESSEL",
+"SCHEDULED_EARLY_TIME",
+"SCHEDULED_PLACE_LATITUDE",
+"IS_CHASSIS_DEST_END_EVENT",
+"IS_CHASSIS_ORIG_END_EVENT",
+"SCHEDULED_REPORTED_TIME_STZ",
+"IS_DEMURRAGE_ORIG_END_EVENT",
+"PTNR_KEY",
+"REQUESTED_REPORTED_PTNR_KEY",
+"ACTUAL_TIME",
+"ESTIMATED_LATE_TIME_STZ",
+"CREATED_BY",
+"ACTUAL_REPORTED_TIME",
+"ESTIMATED_REPORTED_TIME_STZ",
+"SCHEDULED_PLACE_QUALIFIER",
+"REQUESTED_EARLY_TIME",
+"REQUESTED_PLACE_QUALIFIER",
+"LAST_MODIFIED_DATE",
+"SCHEDULED_PLACE_STD_CODE",
+"IS_DEMURRAGE_DEST_START_EVENT",
+"SCHEDULED_PLACE_LONGITUDE",
+"PLACE_LATITUDE",
+"REQUESTED_EARLY_TIME_STZ",
+"IS_DEMURRAGE_DEST_END_EVENT",
+"REQUESTED_LATE_TIME_STZ",
+"EVENT_TIME_STZ",
+"CREATED_DATE",
+"EVENT_TYPE",
+"ACTUAL_PLACE_QUALIFIER",
+"REQUESTED_SOURCE",
+"PLACE_QUALIFIER",
+"REQUESTED_LATE_TIME",
+"EVENT_CODE",
+"SRCUPDTTMST",
+"SCHEDULED_PLACE_NAME",
+"ACTUAL_PLACE_LONGITUDE",
+"ESTIMATED_PLACE_LONGITUDE",
+"SCHEDULED_EARLY_TIME_STZ",
+"SCHEDULED_REPORTED_TIME",
+"SCHEDULED_LATE_TIME",
+"PACK_ID",
+"ESTIMATED_LATE_TIME"
+],
+"primary_columns": [
+"ORG_CODE",
+"PACK_ID",
+"EVENT_SEQ_NUM",
+"ALT_KEY_PACK",
+"ALT_KEY_EVENT"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+},
+{
+"dev_table": "mdi_pack",
+"prd_table": "landing_mdi_pack_t",
+"common_columns": [
+"WEIGHING_LOCATION_QUALIFIER",
+"PRO_NUM",
+"VOLUME",
+"ALT_KEY_PACK",
+"LOG_STATUS",
+"SOURCE_OF_DATA",
+"PACK_TYPE_STD_CODE",
+"LENGTH",
+"WEIGHING_METHOD",
+"IS_DETENTION_DEST_INPROGRESS",
+"QUANTITY_UOM",
+"PACK_ID",
+"WEIGHT_UOM",
+"IS_HAZARDOUS",
+"PACK_CATEGORY",
+"CONTAINER_OWNED_BY",
+"DETENTION_DEST_RULE_KEY",
+"IS_DEMURRAGE_DEST_INPROGRESS",
+"SOURCE_PARENT_PACK_ID",
+"CREATED_DATE",
+"HEIGHT",
+"LAST_MODIFIED_BY",
+"WEIGHING_LOCATION_NAME",
+"IS_DETENTION_ORIG_INPROGRESS",
+"ACTVIND",
+"IS_CHASSIS_DEST_INPROGRESS",
+"SEAL_NUM",
+"EX_STATUS",
+"WEIGHING_LOCATION_CODE",
+"TX_KEY",
+"LEG_INDICATOR",
+"PARENT_PACK_KEY",
+"DETENTION_ORIG_RULE_KEY",
+"IS_CHASSIS_ORIG_INPROGRESS",
+"TOTAL_QUANTITY",
+"DEPART_EVENT_KEY",
+"WEIGHING_PTNR_KEY",
+"VERIFIED_GROSS_WEIGHT_UOM",
+"SRCUPDTTMST",
+"NET_WEIGHT",
+"VERIFIED_GROSS_WEIGHT",
+"IS_COPY",
+"DIMENSION_UOM",
+"VOLUME_UOM",
+"CHASSIS_DEST_RULE_KEY",
+"PACK_TYPE",
+"IM_STATUS",
+"BATCH_ID",
+"SRCCRTTMST",
+"CHASSIS_ORIG_RULE_KEY",
+"ARRIVE_EVENT_KEY",
+"WEIGHING_LOCATION_STD_CODE",
+"ROOT_PACK_KEY",
+"CREATED_BY",
+"SOURCE_PACK_ID",
+"GROSS_WEIGHT",
+"DEMURRAGE_DEST_RULE_KEY",
+"PACK_SEQ_NUM",
+"RESULT_ID",
+"IS_DEMURRAGE_ORIG_INPROGRESS",
+"COMPANY_CODE",
+"DEMURRAGE_ORIG_RULE_KEY",
+"PACK_SUB_TYPE",
+"ORG_CODE",
+"GROSS_VOLUME",
+"CURRENT_EVENT_KEY",
+"IN_TRANSIT_TYPE",
+"WIDTH",
+"LAST_MODIFIED_DATE"
+],
+"primary_columns": [
+"ORG_CODE",
+"ALT_KEY_PACK"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+},
+{
+"dev_table": "mdi_note",
+"prd_table": "landing_mdi_note_t",
+"common_columns": [
+"PK7",
+"TABLE_NAME",
+"PK2",
+"REASON_CODE",
+"SOURCE_OF_DATA",
+"PK6",
+"PK9",
+"PK4",
+"NOTE_SEQ_NUM",
+"RECORD_ALT_KEY",
+"ACTVIND",
+"CREATED_DATE",
+"ENTITY_ALT_KEY",
+"LAST_MODIFIED_BY",
+"NOTE_TYPE",
+"NOTE_CODE",
+"NOTE_MAX_LENGTH",
+"NOTE",
+"IS_ACTIVE",
+"IS_EDITABLE",
+"PK3",
+"PK8",
+"SRCUPDTTMST",
+"PK10",
+"PK5",
+"SRCCRTTMST",
+"PK1",
+"CREATED_BY",
+"IS_EDITABLE_IN_NT",
+"NOTE_TITLE",
+"LAST_MODIFIED_DATE"
+],
+"primary_columns": [
+"NOTE_SEQ_NUM",
+"RECORD_ALT_KEY"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+},
+{
+"dev_table": "mdi_tx_line_reference",
+"prd_table": "landing_mdi_tx_line_reference_t",
+"common_columns": [
+"REFERENCE_TYPE",
+"CREATED_BY",
+"ACTVIND",
+"CREATED_DATE",
+"ALT_KEY_LINE",
+"LAST_MODIFIED_BY",
+"SOURCE_OF_DATA",
+"SRCUPDTTMST",
+"ALT_KEY_TX",
+"LINE_ID",
+"ALT_KEY_REFERENCE",
+"REFERENCE_SEQ_NUM",
+"REFERENCE_NUMBER",
+"TX_ID",
+"ORG_CODE",
+"SRCCRTTMST",
+"TX_TYPE",
+"LAST_MODIFIED_DATE"
+],
+"primary_columns": [
+"ORG_CODE",
+"TX_TYPE",
+"TX_ID",
+"LINE_ID",
+"REFERENCE_SEQ_NUM",
+"ALT_KEY_TX",
+"ALT_KEY_LINE",
+"ALT_KEY_REFERENCE",
+"REFERENCE_TYPE",
+"REFERENCE_NUMBER"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+},
+{
+"dev_table": "mdi_tx_packref",
+"prd_table": "landing_mdi_tx_packref_t",
+"common_columns": [
+"ALT_KEY_PACKREF",
+"CREATED_BY",
+"ACTVIND",
+"SRCUPDTTMST",
+"CREATED_DATE",
+"LAST_MODIFIED_BY",
+"PACK_SEQ_NUM",
+"SOURCE_OF_DATA",
+"ALT_KEY_TX",
+"PACK_CATEGORY",
+"PACK_KEY",
+"TX_ID",
+"ORG_CODE",
+"SRCCRTTMST",
+"TX_TYPE",
+"LAST_MODIFIED_DATE"
+],
+"primary_columns": [
+"ORG_CODE",
+"TX_TYPE",
+"ALT_KEY_TX",
+"ALT_KEY_PACKREF"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+},
+{
+"dev_table": "mdi_tx_ptnr",
+"prd_table": "landing_mdi_tx_ptnr_t",
+"common_columns": [
+"POSTAL_CODE",
+"LAST_NOTIFIED_DATE_STZ",
+"ADDRESS_LINE3",
+"FAX",
+"MASTER_PTNR_KEY",
+"ADDRESS_LINE2",
+"EX_MANUAL_HOLD_REASON_CODE",
+"ALT_KEY_TX",
+"EX_STATUS",
+"LOG_MANUAL_HOLD",
+"IM_REVIEW_FLAG",
+"LAST_NOTIFIED_DATE",
+"SECONDARY_CONTACT_ID",
+"PTNR_SEQ_NUM",
+"GLN",
+"IM_MANUAL_HOLD_REMARKS",
+"SRCCRTTMST",
+"FTZ_FLAG",
+"TX_TYPE",
+"LOG_MANUAL_HOLD_REASON_CODE",
+"FTZ_ID",
+"RPL_UPDATE_ID",
+"END_USER_DESIGNATION",
+"PARENT_PARTNER_KEY",
+"ORG_CODE",
+"PARENT_PARTNER_ORG_CODE",
+"LOG_STATUS",
+"SOURCE_OF_DATA",
+"LOG_REVIEW_REASON_CODE",
+"IS_LINKED_TO_SRC_TX",
+"ALT_KEY_PTNR",
+"ADDRESS_LINE1",
+"PARENT_PARTNER_ID",
+"DO_NOT_SCREEN",
+"ACTVIND",
+"TX_ID",
+"LEGAL_NAME",
+"RPS_STATUS_BY",
+"PROGRAM_TYPE",
+"LOCATION_STD_CODE",
+"IM_STATUS",
+"VAT_NUM",
+"EX_REVIEW_REASON_CODE",
+"LOG_MANUAL_HOLD_REMARKS",
+"IMO",
+"LOG_REVIEW_REMARKS",
+"RPS_STATUS_DATE",
+"SOURCE_SYSTEM_PARTNER_ID",
+"SOURCE_SYSTEM",
+"COUNTRY_CODE",
+"RPS_STATUS",
+"EX_MANUAL_HOLD",
+"SKIP_NEW_DPL",
+"INTERNAL_SOURCE_TRACKING",
+"IM_REVIEW_REMARKS",
+"LAST_MODIFIED_BY",
+"IS_ACTIVE",
+"DO_NOT_SOLICIT",
+"ADDRESS_LINE4",
+"STATE_CODE",
+"EMAIL",
+"PTNR_ID",
+"URL_ADDRESS",
+"IM_MANUAL_HOLD_REASON_CODE",
+"IM_MANUAL_HOLD",
+"PTNR_TYPE",
+"PTNR_ORG_CODE",
+"TAX_IDENTIFICATION_NUM",
+"CREATED_BY",
+"STATE",
+"PRIMARY_CONTACT_ID",
+"LAST_MODIFIED_DATE",
+"COUNTY",
+"COUNTRY",
+"IS_PRIMARY_PTNR",
+"LOG_REVIEW_FLAG",
+"CREATED_DATE",
+"DUNS",
+"EX_REVIEW_FLAG",
+"RESCREEN_ID",
+"INTERNAL_PTNR_ID",
+"EX_REVIEW_REMARKS",
+"RECEIVER_ID",
+"RELATED_PARTY",
+"SRCUPDTTMST",
+"IM_REVIEW_REASON_CODE",
+"PHONE",
+"CITY",
+"PROGRAM_CTRY",
+"EX_MANUAL_HOLD_REMARKS",
+"NAME"
+],
+"primary_columns": [
+"ORG_CODE",
+"TX_TYPE",
+"ALT_KEY_TX",
+"ALT_KEY_PTNR"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+},
+{
+"dev_table": "mdi_tx_reference",
+"prd_table": "landing_mdi_tx_reference_t",
+"common_columns": [
+"REFERENCE_TYPE",
+"CREATED_BY",
+"ACTVIND",
+"SRCUPDTTMST",
+"CREATED_DATE",
+"LAST_MODIFIED_BY",
+"SOURCE_OF_DATA",
+"ALT_KEY_TX",
+"ALT_KEY_REFERENCE",
+"REFERENCE_SEQ_NUM",
+"REFERENCE_NUMBER",
+"TX_ID",
+"ORG_CODE",
+"SRCCRTTMST",
+"TX_TYPE",
+"LAST_MODIFIED_DATE"
+],
+"primary_columns": [
+"ORG_CODE",
+"TX_TYPE",
+"ALT_KEY_TX",
+"ALT_KEY_REFERENCE"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+},
+{
+"dev_table": "mdi_tx_line_ptnr",
+"prd_table": "landing_mdi_tx_line_ptnr_t",
+"common_columns": [
+"POSTAL_CODE",
+"LAST_NOTIFIED_DATE_STZ",
+"ADDRESS_LINE3",
+"FAX",
+"MASTER_PTNR_KEY",
+"ADDRESS_LINE2",
+"EX_MANUAL_HOLD_REASON_CODE",
+"ALT_KEY_TX",
+"EX_STATUS",
+"LOG_MANUAL_HOLD",
+"IM_REVIEW_FLAG",
+"LAST_NOTIFIED_DATE",
+"SECONDARY_CONTACT_ID",
+"PTNR_SEQ_NUM",
+"GLN",
+"IM_MANUAL_HOLD_REMARKS",
+"SRCCRTTMST",
+"FTZ_FLAG",
+"TX_TYPE",
+"LOG_MANUAL_HOLD_REASON_CODE",
+"FTZ_ID",
+"RPL_UPDATE_ID",
+"END_USER_DESIGNATION",
+"PARENT_PARTNER_KEY",
+"ORG_CODE",
+"PARENT_PARTNER_ORG_CODE",
+"LOG_STATUS",
+"SOURCE_OF_DATA",
+"LOG_REVIEW_REASON_CODE",
+"IS_LINKED_TO_SRC_TX",
+"ALT_KEY_PTNR",
+"ADDRESS_LINE1",
+"PARENT_PARTNER_ID",
+"DO_NOT_SCREEN",
+"ACTVIND",
+"TX_ID",
+"LEGAL_NAME",
+"RPS_STATUS_BY",
+"PROGRAM_TYPE",
+"LOCATION_STD_CODE",
+"IM_STATUS",
+"VAT_NUM",
+"ALT_KEY_LINE",
+"EX_REVIEW_REASON_CODE",
+"LOG_MANUAL_HOLD_REMARKS",
+"IMO",
+"LOG_REVIEW_REMARKS",
+"RPS_STATUS_DATE",
+"SOURCE_SYSTEM_PARTNER_ID",
+"SOURCE_SYSTEM",
+"COUNTRY_CODE",
+"RPS_STATUS",
+"EX_MANUAL_HOLD",
+"SKIP_NEW_DPL",
+"INTERNAL_SOURCE_TRACKING",
+"IM_REVIEW_REMARKS",
+"LAST_MODIFIED_BY",
+"IS_ACTIVE",
+"DO_NOT_SOLICIT",
+"ADDRESS_LINE4",
+"STATE_CODE",
+"EMAIL",
+"PTNR_ID",
+"URL_ADDRESS",
+"IM_MANUAL_HOLD_REASON_CODE",
+"LINE_ID",
+"PTNR_TYPE",
+"IM_MANUAL_HOLD",
+"PTNR_ORG_CODE",
+"TAX_IDENTIFICATION_NUM",
+"CREATED_BY",
+"STATE",
+"PRIMARY_CONTACT_ID",
+"LAST_MODIFIED_DATE",
+"COUNTY",
+"COUNTRY",
+"IS_PRIMARY_PTNR",
+"LOG_REVIEW_FLAG",
+"CREATED_DATE",
+"DUNS",
+"EX_REVIEW_FLAG",
+"RESCREEN_ID",
+"INTERNAL_PTNR_ID",
+"EX_REVIEW_REMARKS",
+"RECEIVER_ID",
+"RELATED_PARTY",
+"SRCUPDTTMST",
+"IM_REVIEW_REASON_CODE",
+"PHONE",
+"CITY",
+"PROGRAM_CTRY",
+"EX_MANUAL_HOLD_REMARKS",
+"NAME"
+],
+"primary_columns": [
+"ORG_CODE",
+"TX_TYPE",
+"TX_ID",
+"LINE_ID",
+"PTNR_SEQ_NUM",
+"ALT_KEY_TX",
+"ALT_KEY_LINE",
+"ALT_KEY_PTNR",
+"PTNR_TYPE"
+],
+"exclude_columns": [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+}
+]
+
+
+Column Analysis in prod and dev
+
+def column_analysis(config ):
+dev_catalog = config["dev_catalog"]
+dev_schema = config["dev_schema"]
+prd_catalog = config["prd_catalog"]
+prd_schema = config["prd_schema"]
+
+dev_table = config["dev_table"]
+prd_table = config["prd_table"]
+print(
+f"=====================started column analysis for dev table:{dev_table} and prod table: {prd_table}================================"
+)
+# create dev df
+dev_path_table = f"{dev_catalog}.{dev_schema}.{dev_table}"
+dev_df = spark.table(dev_path_table)
+column_names_list_dev = dev_df.columns
+dev_col_cnt = len(column_names_list_dev)
+# create prd df
+prd_path_table = f"{prd_catalog}.{prd_schema}.{prd_table}"
+prd_df = spark.table(prd_path_table)
+column_names_list_prd = prd_df.columns
+prd_col_cnt = len(column_names_list_prd)
+# find common column in bot dev and prd
+common_col_set = set(column_names_list_dev) & set(column_names_list_prd)
+# find column present in prd but not in dev
+column_only_in_prd = set(column_names_list_prd) - set(column_names_list_dev)
+# find column present in dev but not in prd
+column_only_in_dev = set(column_names_list_dev) - set(column_names_list_prd)
+# save result in dictionary
+result={}
+result["dev_catalog"] = dev_catalog
+result["dev_schema"] = dev_schema
+result["prd_catalog"] = prd_catalog
+result["prd_schema"] = prd_schema
+result["dev_table"] = dev_table
+result["prd_table"] = prd_table
+result["prd_col_count"] = prd_col_cnt
+result["dev_col_count"] = dev_col_cnt
+result["prd_cols"] = column_names_list_prd
+result["dev_cols"] = column_names_list_dev
+result["common_columns"] = common_col_set
+result["column_only_in_prd"] = column_only_in_prd
+result["column_only_in_dev"] = column_only_in_dev
+return result
+
+
+import pandas as pd
+def display_result(results):
+df = pd.DataFrame(results)
+json_string = df.to_json(orient="records", indent=4)
+# print in json
+print(json_string)
+# print in csv table
+display(df)
+
+
+# column Analysis
+print(
+"..................................... column Analysis started ......................................................................"
+)
+table_configs = []
+for config in configs["configs"]:
+config["date_from"]=configs["date_from"]
+config["date_to"]=configs["date_to"]
+
+config["dev_catalog"]=configs["dev_catalog"]
+config["dev_schema"]=configs["dev_schema"]
+
+config["prd_catalog"]=configs["prd_catalog"]
+config["prd_schema"]=configs["prd_schema"]
+
+# get results
+res = column_analysis(config)
+res["primary_columns"] = config["primary_columns"]
+res["exclude_columns"] = [
+"CREATED_BY",
+"LAST_MODIFIED_BY",
+"CREATED_DATE",
+"LAST_MODIFIED_DATE",
+"SRCCRTTMST",
+"SRCUPDTTMST",
+"ACTVIND"
+]
+table_configs.append(res)
+
+print(
+"==================================displaying columns analysis results =============================================== "
+)
+display_result(table_configs)
+
+
+Data Analysis in prod and dev
+
+def find_diff(config):
+print("===============================start=======================================================================================")
+date_from = config.get("date_from")
+date_to = config.get("date_to")
+
+dev_catalog = config["dev_catalog"]
+dev_schema = config["dev_schema"]
+prd_catalog = config["prd_catalog"]
+prd_schema = config["prd_schema"]
+
+dev_table = config["dev_table"]
+prd_table = config["prd_table"]
+
+common_columns = config["common_columns"]
+columns_to_exclude = config["exclude_columns"]
+# common columns
+columns_to_select = [item for item in common_columns if item not in set(columns_to_exclude)]
+print(f"columns data to compare in both table :{columns_to_select}")
+# primary key colimns in both table
+primary_columns = config["primary_columns"]
+print(
+f"===============================started for dev table:{dev_table} and prod table: {prd_table}======================================"
+)
+
+# create dev df
+dev_path_table = f"{dev_catalog}.{dev_schema}.{dev_table}"
+# print(f"processing for dev table: {dev_path_table} ...")
+dev_df_table = spark.read.table(dev_path_table)
+dev_df = dev_df_table.filter(
+(dev_df_table["CREATED_DATE"] >= date_from)
+& (dev_df_table["CREATED_DATE"] < date_to)
+)
+
+dev_cnt = dev_df.count()
+dev_common_df = dev_df.select(*columns_to_select)
+dev_primary_df = dev_df.select(*primary_columns)
+# create prd df
+prd_path_table = f"{prd_catalog}.{prd_schema}.{prd_table}"
+# print(f"processing for prd table: {prd_path_table} ...")
+prd_df_table = spark.read.table(prd_path_table)
+prd_df = prd_df_table.filter(
+(prd_df_table["CREATED_DATE"] >= date_from)
+& (prd_df_table["CREATED_DATE"] < date_to)
+)
+prd_cnt = prd_df.count()
+prd_common_df = prd_df.select(*columns_to_select)
+prd_primary_df = prd_df.select(*primary_columns)
+# check count mismatch in two df dev and prd
+if dev_cnt != prd_cnt:
+print(f"dev count: {dev_cnt} is not equal to prd count: {prd_cnt}")
+else:
+print(f"dev count: {dev_cnt} is equal to prd count: {prd_cnt}")
+# check count mismatch in two df dev and prd
+dev_prd_df = dev_common_df.exceptAll(prd_common_df)
+prd_dev_df = prd_common_df.exceptAll(dev_common_df)
+
+dev_prd_diff_cnt = dev_prd_df.count()
+prd_dev_diff_cnt = prd_dev_df.count()
+print(
+f"dev prod diff count: {dev_prd_diff_cnt} and prod dev diff count: {prd_dev_diff_cnt}"
+)
+# primary key based difference
+primary_dev_prd_df = dev_primary_df.exceptAll(prd_primary_df)
+primary_prd_dev_df = prd_primary_df.exceptAll(dev_primary_df)
+primary_dev_prd_diff_cnt = primary_dev_prd_df.count()
+primary_prd_dev_diff_cnt = primary_prd_dev_df.count()
+print(
+f"primary key dev prod diff count: {primary_dev_prd_diff_cnt} and prod dev diff count: {primary_prd_dev_diff_cnt}"
+)
+
+# return result
+result = {}
+result["dev_table"] = dev_table
+result["prd_table"] = prd_table
+result["dev_count"] = dev_cnt
+result["prd_count"] = prd_cnt
+result["common_dev_minus_prd_diff_cnt"] = dev_prd_diff_cnt
+result["common_prd_minus_dev_diff_cnt"] = prd_dev_diff_cnt
+result["primary_key_dev_minus_prd_diff_cnt"] = primary_dev_prd_diff_cnt
+result["primary_key_prd_minus_dev_diff_cnt"] = primary_prd_dev_diff_cnt
+# print(result)
+print("===============================end=======================================================================================")
+return result
+
+
+# column data comparison analysis
+print("..................................... column data comparison analysis started ......................................................")
+
+cols_data_compare_results = []
+for config in configs["configs"]:
+config["date_from"]=configs["date_from"]
+config["date_to"]=configs["date_to"]
+
+config["dev_catalog"]=configs["dev_catalog"]
+config["dev_schema"]=configs["dev_schema"]
+
+config["prd_catalog"]=configs["prd_catalog"]
+config["prd_schema"]=configs["prd_schema"]
+
+res = find_diff(config)
+cols_data_compare_results.append(res)
+
+print("==================================displaying columns analysis results =============================================== ")
+display_result(cols_data_compare_results)
+
+
+df = spark.createDataFrame(cols_data_compare_results)
+dv_catalog_name = "development"
+dv_schema_name = "dev_prd_data_validation_jdwive"
+#df.write.mode("overwrite").saveAsTable(f"{dv_catalog_name}.{dv_schema_name}.overall_summary")
+# df.write.mode("overwrite").saveAsTable(f"{dv_catalog_name}.{dv_schema_name}.summary")
+df.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(f"{dv_catalog_name}.{dv_schema_name}.overall_summary")
+
+
+Primary Key Mismatch Analysis
+
+# common_columns = config["common_columns"]
+# columns_to_exclude = config["exclude_columns"]
+# primary_columns = config["primary_columns"]
+# # common columns
+# print("dev prod difference ........")
+# columns_to_select = [item for item in common_columns if item not in set(columns_to_exclude)]
+# # dev prod diff calculate
+# df_joined = dev_prd_df.join(prd_df, on=primary_columns, how="left")
+# print(f"{df_joined.count()} rows in dev diff but not in prd")
+# # df_final=compare_dataframes_custom(dev_df, prd_df, columns_to_select)
+# display(df_joined)
+# # prd dev diff calculate
+# print("prod dev difference ........")
+# df_joined = prd_dev_df.join(dev_prd_df, on=primary_columns, how="inner")
+# print(f"{df_joined.count()} rows in prd diff but not in dev")
+
+
+from pyspark.sql import functions as F
+def rename_cols(df, identifier, pk):
+"""Rename non-PK columns with prefix; add exists flag."""
+for col_name in df.columns:
+if pk and col_name not in pk:
+df = df.withColumnRenamed(col_name, f"{identifier}_{col_name}")
+return df.withColumn(f"{identifier}_exists", F.lit("Y"))
+
+def analyse_pk_diff(config):
+print("===============================start=======================================================================================")
+date_from = config.get("date_from")
+date_to = config.get("date_to")
+
+dev_catalog = config["dev_catalog"]
+dev_schema = config["dev_schema"]
+prd_catalog = config["prd_catalog"]
+prd_schema = config["prd_schema"]
+
+dev_table = config["dev_table"]
+prd_table = config["prd_table"]
+
+# primary key colimns in both table
+primary_columns = config["primary_columns"]
+columns_to_exclude = config["exclude_columns"]
+columns_to_select= primary_columns+columns_to_exclude
+print(
+f"===============================started for dev table:{dev_table} and prod table: {prd_table}======================================"
+)
+#========= filtering the data =================
+# create dev df
+dev_path_table = f"{dev_catalog}.{dev_schema}.{dev_table}"
+# print(f"processing for dev table: {dev_path_table} ...")
+dev_df_table = spark.read.table(dev_path_table).select(*columns_to_select)
+dev_df = dev_df_table.filter(
+(dev_df_table["CREATED_DATE"] >= date_from)
+& (dev_df_table["CREATED_DATE"] < date_to)
+)
+df_dev_r = rename_cols(dev_df_table, "dev", primary_columns)
+df_dev_r.printSchema()
+# create prd df
+prd_path_table = f"{prd_catalog}.{prd_schema}.{prd_table}"
+# print(f"processing for prd table: {prd_path_table} ...")
+prd_df_table = spark.read.table(prd_path_table).select(*columns_to_select)
+prd_df = prd_df_table.filter(
+(prd_df_table["CREATED_DATE"] >= date_from)
+& (prd_df_table["CREATED_DATE"] < date_to)
+)
+df_prd_r = rename_cols(prd_df_table, "prd", primary_columns)
+df_prd_r.printSchema()
+
+#========= processing the data =================
+dev_cnt = dev_df.count()
+dev_primary_df = dev_df.select(*primary_columns)
+prd_cnt = prd_df.count()
+prd_primary_df = prd_df.select(*primary_columns)
+# check count mismatch in two df dev and prd
+if dev_cnt != prd_cnt:
+print(f"dev count: {dev_cnt} is not equal to prd count: {prd_cnt} , missing data ....")
+else:
+print(f"dev count: {dev_cnt} is equal to prd count: {prd_cnt} , checking for pk mismatch ... ")
+# check count mismatch in two df dev and prd based on pk
+primary_dev_prd_df = dev_primary_df.exceptAll(prd_primary_df)
+primary_prd_dev_df = prd_primary_df.exceptAll(dev_primary_df)
+primary_dev_prd_diff_cnt = primary_dev_prd_df.count()
+primary_prd_dev_diff_cnt = primary_prd_dev_df.count()
+print(
+f"primary key dev prod diff count: {primary_dev_prd_diff_cnt} and prod dev diff count: {primary_prd_dev_diff_cnt}"
+)
+if primary_dev_prd_diff_cnt > 0:
+print(f"primary key dev prod diff count: {primary_dev_prd_diff_cnt} , missing data ....")
+d_joined_df = df_dev_r.join(df_prd_r, on=primary_columns, how="outer").join(primary_dev_prd_df, on=primary_columns, how="inner")
+print(f"total count after dev join:{d_joined_df.count()}")
+display(d_joined_df)
+
+if primary_prd_dev_diff_cnt > 0:
+print(f"primary key prod dev diff count: {primary_prd_dev_diff_cnt} , missing data ....")
+p_joined_df = df_prd_r.join(df_dev_r, on=primary_columns, how="outer").join(primary_prd_dev_df, on=primary_columns, how="inner")
+print(f"total count after prd join:{p_joined_df.count()}")
+display(p_joined_df)
+
+
+# column data comparison analysis
+print("..................................... column data comparison analysis started based on pk ...................................")
+
+cols = ["mdi_tx_line","mdi_tx_reference","mdi_tx_line_reference","mdi_tx_location"]
+
+for config in configs["configs"]:
+config["date_from"]=configs["date_from"]
+config["date_to"]=configs["date_to"]
+
+config["dev_catalog"]=configs["dev_catalog"]
+config["dev_schema"]=configs["dev_schema"]
+
+config["prd_catalog"]=configs["prd_catalog"]
+config["prd_schema"]=configs["prd_schema"]
+if config["dev_table"] in cols:
+analyse_pk_diff(config)

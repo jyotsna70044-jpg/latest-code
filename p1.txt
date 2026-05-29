@@ -1,0 +1,3340 @@
+Explain 1
+
+Workflow
+
+Config
+
+workflow:
+    name: ilm_bronze_ARTA
+    cluster_name: cluster_ilm_bronze_ARTA
+
+cluster:
+    spark_version: 16.4.x-scala2.13
+    policy_id: 0001168AEB0E685D
+    runtime_engine: STANDARD
+    custom_tags:
+        nike-squad: inbound_transportation
+        nike-environment: prod
+        nike-techsolution: inbound_transportation
+        nike-initiative: inbound_transportation
+    aws_attributes:
+        availability: ON_DEMAND
+        ebs_volume_count: 1
+        ebs_volume_size: 100
+        instance_profile_arn: arn:aws:iam::443370701835:instance-profile/sole/group/inbound_transportation
+    spark_conf:
+        spark.sql.extensions: io.delta.sql.DeltaSparkSessionExtension
+        # spark.sql.catalog.spark_catalog: org.apache.spark.sql.delta.catalog.DeltaCatalog
+
+landing:
+    catalog: non_published_domain
+    schema: ilm
+
+task_settings:
+    max_retries: 1
+    min_retry_interval_millis: 120000
+
+schedules:
+    schedule: 0 0 */3 ? * *
+    pre_stage_schedule: null
+    stage_schedule: null
+
+task_paths:
+    autoloader: products/global_ilm/arta/spark/python/src/tasks/landing/autoloader.py
+    bronze_merge: products/global_ilm/arta/spark/python/src/tasks/landing/arta_bronze_merge.py
+
+sole:
+    job_webhook_notifications_id: 5495d250-8018-4956-a53b-4a5c14a61abd
+    permissions:
+        can_manage:
+            - App.NikeSole.inbound_transportation.DataAdmin
+            - App.NikeSole.inbound_transportation.Developer
+        can_view:
+            - App.NikeSole.inbound_transportation.Analyst
+
+# Workflow level configurations
+landing_stage:
+    min_workers: 1
+    max_workers: 2
+    node_type: mgd-fleet.2xlarge
+    driver_node_type: mgd-fleet.2xlarge
+    databricks_host: "https://nike-sole-react-2.cloud.databricks.com"
+    secret_scope: "inbound_service_prod"
+    secret_key: "sp_pat_token"
+    pre_stage_job_id: 0
+
+pre_stage:
+    workflow_name: ilm_pre_stage_ARTA
+    cluster_name: cluster_ilm_pre_stage_ARTA
+    min_workers: 1
+    max_workers: 8
+    node_type: mgd-fleet.4xlarge
+    driver_node_type: mgd-fleet.4xlarge
+    databricks_host: "https://nike-sole-react-2.cloud.databricks.com"
+    secret_scope: "inbound_service_prod"
+    secret_key: "sp_pat_token"
+    stage_job_id: 0
+
+stage:
+    workflow_name: ilm_stage_ARTA
+    cluster_name: cluster_ilm_stage_ARTA
+    min_workers: 1
+    max_workers: 8
+    node_type: mgd-fleet.4xlarge
+    driver_node_type: mgd-fleet.4xlarge
+    databricks_host: "https://nike-sole-react-2.cloud.databricks.com"
+    secret_scope: "inbound_service_prod"
+    secret_key: "sp_pat_token"
+    sales_order_integrated_job_id: 0
+    purchase_order_integrated_job_id: 0
+    fulfillment_integrated_job_id: 0
+    shipment_integrated_job_id: 0
+
+
+LANDING
+
+import requests
+from pathlib import Path
+from typing import Any, Dict
+from brickflow import Group, TaskSettings
+import yaml
+from brickflow.context import ctx
+from spark.python.src.tasks.landing import arta_bronze_s3_to_dbx
+from brickflow.engine.compute import Cluster
+from brickflow.engine.workflow import Workflow, WorkflowPermissions  , WorkflowWebhookNotifications
+from brickflow.bundles.model import JobsWebhookNotificationsOnFailure
+
+def _load_workflow_config_for_env(current_env: str) -> Dict[str, Any]:
+    
+    if str(current_env).lower() == "prod":
+        env_key = "prod" 
+    elif str(current_env).lower() == "qa" :
+        env_key = "qa"
+    else:
+        env_key = "dev"
+    
+    config_path = Path(__file__).resolve().parents[1] / "config" / f"{env_key}.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Workflow config file not found: {config_path}")
+    return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+
+
+env = ctx.env
+print(f"Current environment: {env}")
+env_config = _load_workflow_config_for_env(env)
+
+workflow_config = env_config.get("workflow", {})
+landing_stage_config = env_config.get("landing_stage", {})
+cluster_config = env_config.get("cluster", {})
+sole_config = env_config.get("sole", {})
+permissions_config = sole_config.get("permissions", {})
+task_settings_config = env_config.get("task_settings", {})
+schedules_config = env_config.get("schedules", {})
+landing_config = env_config.get("landing", {})
+
+
+
+WORKFLOW_NAME = workflow_config.get("name", "ilm_bronze_AR_event")
+CLUSTER_NAME = workflow_config.get("cluster_name", "cluster_ilm_bronze_AR_testing")
+
+MIN_WORKERS = landing_stage_config.get("min_workers", 1)
+MAX_WORKERS = landing_stage_config.get("max_workers", 2)
+
+# Create cluster using config values
+cluster = Cluster(
+    name=CLUSTER_NAME,
+    spark_version=cluster_config.get("spark_version", "14.3.x-scala2.12"),
+    node_type_id=landing_stage_config.get("node_type", cluster_config.get("node_type_id")),
+    driver_node_type_id=landing_stage_config.get("driver_node_type", cluster_config.get("driver_node_type_id")),
+    policy_id=cluster_config.get("policy_id"),
+    min_workers=MIN_WORKERS,
+    max_workers=MAX_WORKERS,
+    runtime_engine=cluster_config.get("runtime_engine", "STANDARD"),
+    custom_tags=cluster_config.get("custom_tags", {}),
+    aws_attributes=cluster_config.get("aws_attributes", {}),
+    spark_conf=cluster_config.get("spark_conf", {}),
+)
+
+# Get webhook ID for current environment
+webhook_id = sole_config.get("job_webhook_notifications_id", None)
+
+# Create workflow using config values
+wf = Workflow(
+    WORKFLOW_NAME,
+    default_cluster=cluster,
+    # webhook_notifications=WorkflowWebhookNotifications(
+    #     on_failure=[JobsWebhookNotificationsOnFailure(id=webhook_id)]
+    # ) if webhook_id else None,
+    permissions=WorkflowPermissions(
+        can_manage=[
+            Group(g)
+            for g in permissions_config.get("can_manage", ["App.NikeSole.inbound_transportation.DataAdmin"])
+        ]
+    ),
+    default_task_settings=TaskSettings(
+        max_retries=task_settings_config.get("max_retries", 1),
+        min_retry_interval_millis=task_settings_config.get("min_retry_interval_millis", 120000),
+    ),
+    schedule_quartz_expression=schedules_config.get("schedule", None),
+)
+
+
+# Get catalog and schema for current environment
+catalog = landing_config.get("catalog", "development")
+schema = landing_config.get("schema", "dev_ilm_arta")
+
+print(f"catalog: {catalog}, schema: {schema}")
+
+@wf.task
+def start():
+    print("Starting the workflow")
+
+@wf.task(name="ingest_table_mdi_tx", depends_on=["start"])
+def load_landing_mdi_tx_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_tx_task()
+
+@wf.task(name="merge_table_mdi_tx", depends_on=["ingest_table_mdi_tx"])
+def merge_table_mdi_tx_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_tx_task()
+
+@wf.task(name="ingest_table_mdi_tx_line", depends_on=["start"])
+def load_landing_mdi_tx_line_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_tx_line_task()
+
+@wf.task(name="merge_table_mdi_tx_line", depends_on=["ingest_table_mdi_tx_line"])
+def merge_table_mdi_tx_line_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_tx_line_task()
+
+
+@wf.task(name="ingest_table_mdi_tx_line_de", depends_on=["start"])
+def load_landing_mdi_tx_line_de_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_tx_line_de_task()
+
+
+@wf.task(name="merge_table_mdi_tx_line_de", depends_on=["ingest_table_mdi_tx_line_de"])
+def merge_table_mdi_tx_line_de_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_tx_line_de_task()
+
+
+@wf.task(name="ingest_table_mdi_tx_line_event", depends_on=["start"])
+def load_landing_mdi_tx_line_event_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_tx_line_event_task()
+
+@wf.task(name="merge_table_mdi_tx_line_event", depends_on=["ingest_table_mdi_tx_line_event"])
+def merge_table_mdi_tx_line_event_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_tx_line_event_task()
+
+@wf.task(name="ingest_table_mdi_tx_line_measure", depends_on=["start"])
+def load_landing_mdi_tx_line_measure_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_tx_line_measure_task()
+
+@wf.task(name="merge_table_mdi_tx_line_measure", depends_on=["ingest_table_mdi_tx_line_measure"])
+def merge_table_mdi_tx_line_measure_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_tx_line_measure_task()
+
+
+@wf.task(name="ingest_table_mdi_tx_line_ptnr", depends_on=["start"])
+def load_landing_mdi_tx_line_ptnr_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_tx_line_ptnr_task()
+
+
+@wf.task(name="merge_table_mdi_tx_line_ptnr", depends_on=["ingest_table_mdi_tx_line_ptnr"])
+def merge_table_mdi_tx_line_ptnr_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_tx_line_ptnr_task()
+
+
+@wf.task(name="ingest_table_mdi_tx_line_reference", depends_on=["start"])
+def load_landing_mdi_tx_line_reference_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_tx_line_reference_task()
+
+
+@wf.task(name="merge_table_mdi_tx_line_reference", depends_on=["ingest_table_mdi_tx_line_reference"])
+def merge_table_mdi_tx_line_reference_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_tx_line_reference_task()
+
+
+@wf.task(name="ingest_table_mdi_tx_line_date", depends_on=["start"])
+def load_landing_mdi_tx_line_date_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_tx_line_date_task()
+
+
+@wf.task(name="merge_table_mdi_tx_line_date", depends_on=["ingest_table_mdi_tx_line_date"])
+def merge_table_mdi_tx_line_date_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_tx_line_date_task()
+
+
+@wf.task(name="ingest_table_mdi_tx_event", depends_on=["start"])
+def load_landing_mdi_tx_event_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_tx_event_task()
+
+
+@wf.task(name="merge_table_mdi_tx_event", depends_on=["ingest_table_mdi_tx_event"])
+def merge_table_mdi_tx_event_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_tx_event_task()
+
+
+@wf.task(name="ingest_table_mdi_tx_matrix", depends_on=["start"])
+def load_landing_mdi_tx_matrix_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_tx_matrix_task()
+
+
+
+@wf.task(name="merge_table_mdi_tx_matrix", depends_on=["ingest_table_mdi_tx_matrix"])
+def merge_table_mdi_tx_matrix_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_tx_matrix_task()
+
+
+@wf.task(name="ingest_table_mdi_tx_measure", depends_on=["start"])
+def load_landing_mdi_tx_measure_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_tx_measure_task()
+
+
+@wf.task(name="merge_table_mdi_tx_measure", depends_on=["ingest_table_mdi_tx_measure"])
+def merge_table_mdi_tx_measure_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_tx_measure_task()
+
+
+@wf.task(name="ingest_table_mdi_tx_location", depends_on=["start"])
+def load_landing_mdi_tx_location_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_tx_location_task()
+
+
+@wf.task(name="merge_table_mdi_tx_location", depends_on=["ingest_table_mdi_tx_location"])
+def merge_table_mdi_tx_location_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_tx_location_task()
+
+
+@wf.task(name="ingest_table_mdi_tx_packref", depends_on=["start"])
+def load_landing_mdi_tx_packref_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_tx_packref_task()
+
+
+@wf.task(name="merge_table_mdi_tx_packref", depends_on=["ingest_table_mdi_tx_packref"])
+def merge_table_mdi_tx_packref_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_tx_packref_task()
+
+
+@wf.task(name="ingest_table_mdi_tx_reference", depends_on=["start"])
+def load_landing_mdi_tx_reference_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_tx_reference_task()
+
+
+@wf.task(name="merge_table_mdi_tx_reference", depends_on=["ingest_table_mdi_tx_reference"])
+def merge_table_mdi_tx_reference_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_tx_reference_task()
+
+
+@wf.task(name="ingest_table_mdi_tx_ptnr", depends_on=["start"])
+def load_landing_mdi_tx_ptnr_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_tx_ptnr_task()
+
+
+@wf.task(name="merge_table_mdi_tx_ptnr", depends_on=["ingest_table_mdi_tx_ptnr"])
+def merge_table_mdi_tx_ptnr_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_tx_ptnr_task()
+
+
+@wf.task(name="ingest_table_mdi_pack", depends_on=["start"])
+def load_landing_mdi_pack_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_pack_task()
+
+
+@wf.task(name="merge_table_mdi_pack", depends_on=["ingest_table_mdi_pack"])
+def merge_table_mdi_pack_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_pack_task()
+
+
+@wf.task(name="ingest_table_mdi_pack_event", depends_on=["start"])
+def load_landing_mdi_pack_event_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_pack_event_task()
+
+
+@wf.task(name="merge_table_mdi_pack_event", depends_on=["ingest_table_mdi_pack_event"])
+def merge_table_mdi_pack_event_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_pack_event_task()
+
+
+@wf.task(name="ingest_table_mdi_pack_measure", depends_on=["start"])
+def load_landing_mdi_pack_measure_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_pack_measure_task()
+
+
+@wf.task(name="merge_table_mdi_pack_measure", depends_on=["ingest_table_mdi_pack_measure"])
+def merge_table_mdi_pack_measure_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_pack_measure_task()
+
+
+@wf.task(name="ingest_table_mdi_note", depends_on=["start"])
+def load_landing_mdi_note_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_note_task()
+
+@wf.task(name="merge_table_mdi_note", depends_on=["ingest_table_mdi_note"])
+def merge_table_mdi_note_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_note_task()
+
+
+@wf.task(name="ingest_table_mdi_ptnr", depends_on=["start"])
+def load_landing_mdi_ptnr_task():
+    arta_bronze_s3_to_dbx.load_landing_mdi_ptnr_task()
+
+
+@wf.task(name="merge_table_mdi_ptnr", depends_on=["ingest_table_mdi_ptnr"])
+def merge_table_mdi_ptnr_task():
+    arta_bronze_s3_to_dbx.merge_table_mdi_ptnr_task()
+
+
+@wf.task(depends_on=["merge_table_mdi_tx", "merge_table_mdi_tx_line", "merge_table_mdi_tx_line_de", "merge_table_mdi_tx_line_event", "merge_table_mdi_tx_line_measure", "merge_table_mdi_tx_line_ptnr", "merge_table_mdi_tx_line_reference", "merge_table_mdi_tx_line_date", "merge_table_mdi_tx_event", "merge_table_mdi_tx_matrix", "merge_table_mdi_tx_measure", "merge_table_mdi_tx_location", "merge_table_mdi_tx_packref", "merge_table_mdi_tx_reference", "merge_table_mdi_tx_ptnr", "merge_table_mdi_pack", "merge_table_mdi_pack_event", "merge_table_mdi_pack_measure", "merge_table_mdi_note", "merge_table_mdi_ptnr"])
+def end():
+    print("All table ingestions and merges completed successfully!")
+
+
+databricks_host = landing_stage_config.get("databricks_host", "")
+secret_scope = landing_stage_config.get("secret_scope", "")
+secret_key = landing_stage_config.get("secret_key", "")
+pre_stage_job_id = int(landing_stage_config.get("pre_stage_job_id", 0))
+
+
+@wf.task(depends_on=["end"])
+def trigger_pre_stage_workflow():
+    api_token = ctx.dbutils.secrets.get(secret_scope, secret_key)
+    url = f"{databricks_host.rstrip('/')}/api/2.1/jobs/run-now"
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json",
+    }
+    response = requests.post(url, json={"job_id": pre_stage_job_id}, headers=headers)
+    response.raise_for_status()
+    run_id = response.json().get("run_id")
+    print(f"Triggered pre_stage workflow (job_id={pre_stage_job_id}), run_id={run_id}")
+
+
+PRE STAGE
+
+import requests
+from pathlib import Path
+from typing import Any, Dict
+
+import yaml
+from brickflow import Group, TaskSettings
+from brickflow.context import ctx
+from brickflow.engine.compute import Cluster
+from brickflow.engine.workflow import Workflow, WorkflowPermissions, WorkflowWebhookNotifications
+from brickflow.bundles.model import JobsWebhookNotificationsOnFailure
+
+from spark.python.src.core.tasks_base import TasksBase
+from spark.python.src.tasks.pre_stage import arta_pre_stage
+from workflows.shared_lib.shared_functions import ctx_workflows
+
+def _load_workflow_config_for_env(current_env: str) -> Dict[str, Any]:
+    if str(current_env).lower() == "prod":
+        env_key = "prod"
+    elif str(current_env).lower() == "qa":
+        env_key = "qa"
+    else:
+        env_key = "dev"
+
+    config_path = Path(__file__).resolve().parents[1] / "config" / f"{env_key}.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Workflow config file not found: {config_path}")
+    return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+
+env = ctx.env
+print(f"Current environment: {env}")
+env_config = _load_workflow_config_for_env(env)
+
+# workflow_config = env_config.get("pre_stage", {})
+pre_stage_config = env_config.get("pre_stage", {})
+cluster_config = env_config.get("cluster", {})
+sole_config = env_config.get("sole", {})
+permissions_config = sole_config.get("permissions", {})
+task_settings_config = env_config.get("task_settings", {})
+schedules_config = env_config.get("schedules", {})
+
+WORKFLOW_NAME = pre_stage_config.get("workflow_name", "ilm_pre_stage_ARTA")
+CLUSTER_NAME = pre_stage_config.get("cluster_name", "cluster_ilm_pre_stage_ARTA")
+
+MIN_WORKERS = pre_stage_config.get("min_workers", 1)
+MAX_WORKERS = pre_stage_config.get("max_workers", 2)
+
+cluster = Cluster(
+    name=CLUSTER_NAME,
+    spark_version=cluster_config.get("spark_version", "14.3.x-scala2.12"),
+    node_type_id=pre_stage_config.get("node_type", cluster_config.get("node_type_id")),
+    driver_node_type_id=pre_stage_config.get("driver_node_type", cluster_config.get("driver_node_type_id")),
+    policy_id=cluster_config.get("policy_id"),
+    min_workers=MIN_WORKERS,
+    max_workers=MAX_WORKERS,
+    runtime_engine=cluster_config.get("runtime_engine", "STANDARD"),
+    custom_tags=cluster_config.get("custom_tags", {}),
+    aws_attributes=cluster_config.get("aws_attributes", {}),
+    spark_conf=cluster_config.get("spark_conf", {}),
+)
+
+webhook_id = sole_config.get("job_webhook_notifications_id", None)
+
+wf = Workflow(
+    WORKFLOW_NAME,
+    default_cluster=cluster,
+    permissions=WorkflowPermissions(
+        can_manage=[
+            Group(g)
+            for g in permissions_config.get("can_manage", ["App.NikeSole.inbound_transportation.DataAdmin"])
+        ]
+    ),
+    default_task_settings=TaskSettings(
+        max_retries=task_settings_config.get("max_retries", 1),
+        min_retry_interval_millis=task_settings_config.get("min_retry_interval_millis", 120000),
+    ),
+    schedule_quartz_expression=schedules_config.get("pre_stage_schedule", None),
+)
+
+TasksBase(ctx_workflows.to_dict())
+
+@wf.task
+def start():
+    print("Starting ARTA pre-stage workflow")
+
+# ARTA Purchase Domain Pre-stage
+
+@wf.task(name="pre_stage_purchase_order_item_events", depends_on=["start"])
+def pre_stage_purchase_order_item_events():
+    arta_pre_stage.load_pre_stage_arta_purchase_order_item_events()
+
+@wf.task(name="pre_stage_purchase_order_header_reference", depends_on=["start"])
+def pre_stage_purchase_order_header_reference():
+    arta_pre_stage.load_pre_stage_arta_purchase_order_header_reference()
+
+@wf.task(name="pre_stage_purchase_order_item_measure", depends_on=["start"])
+def pre_stage_purchase_order_item_measure():
+    arta_pre_stage.load_pre_stage_arta_purchase_order_item_measure()
+
+
+@wf.task(name="pre_stage_vendor_booking_item_measure", depends_on=["start"])
+def pre_stage_vendor_booking_item_measure():
+    arta_pre_stage.load_pre_stage_arta_vendor_booking_item_measure()
+
+
+@wf.task(name="pre_stage_purchase_order_item_reference", depends_on=["start"])
+def pre_stage_purchase_order_item_reference():
+    arta_pre_stage.load_pre_stage_arta_purchase_order_item_reference()
+
+@wf.task(name="pre_stage_purchase_order_item_partner", depends_on=["start"])
+def pre_stage_purchase_order_item_partner():
+    arta_pre_stage.load_pre_stage_arta_purchase_order_item_partner()
+
+@wf.task(name="pre_stage_purchase_order_item_note", depends_on=["start"])
+def pre_stage_purchase_order_item_note():
+    arta_pre_stage.load_pre_stage_arta_purchase_order_item_note()
+
+
+# ARTA Shipment Pre-stage
+
+@wf.task(name="pre_stage_shipment_note", depends_on=["start"])
+def pre_stage_shipment_note():
+    arta_pre_stage.load_pre_stage_arta_shipment_note()
+
+
+@wf.task(name="pre_stage_shipment_measure", depends_on=["start"])
+def pre_stage_shipment_measure():
+    arta_pre_stage.load_pre_stage_arta_shipment_measure()
+
+
+@wf.task(name="pre_stage_shipment_reference", depends_on=["start"])
+def pre_stage_shipment_reference():
+    arta_pre_stage.load_pre_stage_arta_shipment_reference()
+
+
+@wf.task(name="pre_stage_shipment_location", depends_on=["start"])
+def pre_stage_shipment_location():
+    arta_pre_stage.load_pre_stage_arta_shipment_location()
+
+
+@wf.task(name="pre_stage_shipment_partner", depends_on=["start"])
+def pre_stage_shipment_partner():
+    arta_pre_stage.load_pre_stage_arta_shipment_partner()
+
+
+@wf.task(name="pre_stage_shipment_container_measure", depends_on=["start"])
+def pre_stage_shipment_container_measure():
+    arta_pre_stage.load_pre_stage_arta_shipment_container_measure()
+
+
+@wf.task(name="pre_stage_shipment_container_events", depends_on=["start"])
+def pre_stage_shipment_container_events():
+    arta_pre_stage.load_pre_stage_arta_shipment_container_events()
+
+
+@wf.task(name="pre_stage_shipment_header_events", depends_on=["start"])
+def pre_stage_shipment_header_events():
+    arta_pre_stage.load_pre_stage_arta_shipment_header_events()
+
+
+@wf.task(name="pre_stage_shipment_item_events", depends_on=["start"])
+def pre_stage_shipment_item_events():
+    arta_pre_stage.load_pre_stage_arta_shipment_item_events()
+
+
+# ARTA Sales Order Pre-stage
+
+@wf.task(name="pre_stage_sales_order_item_measure", depends_on=["start"])
+def pre_stage_sales_order_item_measure():
+    arta_pre_stage.load_pre_stage_arta_sales_order_item_measure()
+
+
+@wf.task(name="pre_stage_sales_order_item_date", depends_on=["start"])
+def pre_stage_sales_order_item_date():
+    arta_pre_stage.load_pre_stage_arta_sales_order_item_date()
+
+@wf.task(name="pre_stage_sales_order_item_reference", depends_on=["start"])
+def pre_stage_sales_order_item_reference():
+    arta_pre_stage.load_pre_stage_arta_sales_order_item_reference()
+
+# ARTA Fulfillment Domain Pre-stage
+
+@wf.task(name="pre_stage_shipment_item_measure", depends_on=["start"])
+def pre_stage_shipment_item_measure():
+    arta_pre_stage.load_pre_stage_arta_shipment_item_measure()
+
+@wf.task(name="pre_stage_shipment_item_reference", depends_on=["start"])
+def pre_stage_shipment_item_reference():
+    arta_pre_stage.load_pre_stage_arta_shipment_item_reference()
+
+@wf.task(depends_on=[
+    "pre_stage_purchase_order_item_events",
+    "pre_stage_purchase_order_header_reference",
+    "pre_stage_purchase_order_item_measure",
+    "pre_stage_vendor_booking_item_measure",
+    "pre_stage_purchase_order_item_reference",
+    "pre_stage_purchase_order_item_partner",
+    "pre_stage_purchase_order_item_note",
+    "pre_stage_shipment_note",
+    "pre_stage_shipment_measure",
+    "pre_stage_shipment_reference",
+    "pre_stage_shipment_location",
+    "pre_stage_shipment_partner",
+    "pre_stage_shipment_container_measure",
+    "pre_stage_shipment_container_events",
+    "pre_stage_shipment_header_events",
+    "pre_stage_shipment_item_events",
+    "pre_stage_sales_order_item_measure",
+    "pre_stage_sales_order_item_date",
+    "pre_stage_sales_order_item_reference",
+    "pre_stage_shipment_item_measure",
+    "pre_stage_shipment_item_reference",
+])
+def end():
+    print("All ARTA pre-stage tasks completed successfully!")
+
+
+databricks_host = pre_stage_config.get("databricks_host", "")
+secret_scope = pre_stage_config.get("secret_scope", "")
+secret_key = pre_stage_config.get("secret_key", "")
+stage_job_id = int(pre_stage_config.get("stage_job_id", 0))
+
+
+@wf.task(depends_on=["end"])
+def trigger_stage_workflow():
+    api_token = ctx.dbutils.secrets.get(secret_scope, secret_key)
+    url = f"{databricks_host.rstrip('/')}/api/2.1/jobs/run-now"
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json",
+    }
+    response = requests.post(url, json={"job_id": stage_job_id}, headers=headers)
+    response.raise_for_status()
+    run_id = response.json().get("run_id")
+    print(f"Triggered stage workflow (job_id={stage_job_id}), run_id={run_id}")
+
+STAGE
+
+import requests
+from pathlib import Path
+from typing import Any, Dict
+
+import yaml
+from brickflow import Group, TaskSettings
+from brickflow.context import ctx
+from brickflow.engine.compute import Cluster
+from brickflow.engine.workflow import Workflow, WorkflowPermissions, WorkflowWebhookNotifications
+from brickflow.bundles.model import JobsWebhookNotificationsOnFailure
+
+from spark.python.src.core.tasks_base import TasksBase
+from spark.python.src.tasks.stage import arta_stage
+from workflows.shared_lib.shared_functions import ctx_workflows
+
+
+# Helper function to load the workflow config for the current environment.
+
+def _load_workflow_config_for_env(current_env: str) -> Dict[str, Any]:
+    if str(current_env).lower() == "prod":
+        env_key = "prod"
+    elif str(current_env).lower() == "qa":
+        env_key = "qa"
+    else:
+        env_key = "dev"
+
+    config_path = Path(__file__).resolve().parents[1] / "config" / f"{env_key}.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Workflow config file not found: {config_path}")
+    return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+
+env = ctx.env
+print(f"Current environment: {env}")
+env_config = _load_workflow_config_for_env(env)
+
+# workflow_config = env_config.get("pre_stage", {})
+stage_config = env_config.get("stage", {})
+cluster_config = env_config.get("cluster", {})
+sole_config = env_config.get("sole", {})
+permissions_config = sole_config.get("permissions", {})
+task_settings_config = env_config.get("task_settings", {})
+schedules_config = env_config.get("schedules", {})
+
+WORKFLOW_NAME = stage_config.get("workflow_name", "ilm_stage_ARTA")
+CLUSTER_NAME = stage_config.get("cluster_name", "cluster_ilm_stage_ARTA")
+
+MIN_WORKERS = stage_config.get("min_workers", 1)
+MAX_WORKERS = stage_config.get("max_workers", 2)
+
+cluster = Cluster(
+    name=CLUSTER_NAME,
+    spark_version=cluster_config.get("spark_version", "14.3.x-scala2.12"),
+    node_type_id=stage_config.get("node_type", cluster_config.get("node_type_id")),
+    driver_node_type_id=stage_config.get("driver_node_type", cluster_config.get("driver_node_type_id")),
+    policy_id=cluster_config.get("policy_id"),
+    min_workers=MIN_WORKERS,
+    max_workers=MAX_WORKERS,
+    runtime_engine=cluster_config.get("runtime_engine", "STANDARD"),
+    custom_tags=cluster_config.get("custom_tags", {}),
+    aws_attributes=cluster_config.get("aws_attributes", {}),
+    spark_conf=cluster_config.get("spark_conf", {}),
+)
+
+webhook_id = sole_config.get("job_webhook_notifications_id", None)
+
+wf = Workflow(
+    WORKFLOW_NAME,
+    default_cluster=cluster,
+    permissions=WorkflowPermissions(
+        can_manage=[
+            Group(g)
+            for g in permissions_config.get("can_manage", ["App.NikeSole.inbound_transportation.DataAdmin"])
+        ]
+    ),
+    default_task_settings=TaskSettings(
+        max_retries=task_settings_config.get("max_retries", 1),
+        min_retry_interval_millis=task_settings_config.get("min_retry_interval_millis", 120000),
+    ),
+    schedule_quartz_expression=schedules_config.get("stage_schedule", None),
+)
+
+TasksBase(ctx_workflows.to_dict())
+
+@wf.task
+def start():
+    print("Starting ARTA stage workflow")
+
+@wf.task(name="load_stage_arta_delivery_item_task", depends_on=["start"])
+def load_stage_arta_delivery_item_task():
+    arta_stage.load_stage_arta_delivery_item()
+
+@wf.task(name="load_stage_purchase_order_item_events_task", depends_on=["start"])
+def load_stage_purchase_order_item_events_task():
+    arta_stage.load_stage_purchase_order_item_events()
+
+@wf.task(name="load_stage_arta_purchase_order_item_task", depends_on=["start"])
+def load_stage_arta_purchase_order_item_task():
+    arta_stage.load_stage_arta_purchase_order_item()
+
+@wf.task(name="load_stage_sales_order_item_task", depends_on=["start"])
+def load_stage_sales_order_item_task():
+    arta_stage.load_stage_sales_order_item()
+
+@wf.task(name="load_ilm_shipment_item_task", depends_on=["start"])
+def load_ilm_shipment_item_task():
+    arta_stage.load_stage_ilm_shipment_item()
+
+@wf.task(name="load_stage_arta_shipment_header_task", depends_on=["start"])
+def load_stage_arta_shipment_header_task():
+    arta_stage.load_stage_arta_shipment_header()
+
+@wf.task(name="load_stage_arta_shipment_header_events_task", depends_on=["start"])
+def load_stage_arta_shipment_header_events_task():
+    arta_stage.load_stage_arta_shipment_header_events()
+
+@wf.task(depends_on=[
+    "load_stage_arta_delivery_item_task",
+    "load_stage_purchase_order_item_events_task",
+    "load_stage_arta_purchase_order_item_task",
+    "load_stage_sales_order_item_task",
+    "load_ilm_shipment_item_task",
+    "load_stage_arta_shipment_header_task",
+    "load_stage_arta_shipment_header_events_task",
+])
+def end():
+    print("All ARTA stage tasks completed successfully!")
+
+
+databricks_host = stage_config.get("databricks_host", "")
+secret_scope = stage_config.get("secret_scope", "")
+secret_key = stage_config.get("secret_key", "")
+sales_order_integrated_job_id = int(stage_config.get("sales_order_integrated_job_id", 0))
+purchase_order_integrated_job_id = int(stage_config.get("purchase_order_integrated_job_id", 0))
+fulfillment_integrated_job_id = int(stage_config.get("fulfillment_integrated_job_id", 0))
+shipment_integrated_job_id = int(stage_config.get("shipment_integrated_job_id", 0))
+
+
+def _trigger_job(job_id, job_name):
+    api_token = ctx.dbutils.secrets.get(secret_scope, secret_key)
+    url = f"{databricks_host.rstrip('/')}/api/2.1/jobs/run-now"
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json",
+    }
+    response = requests.post(url, json={"job_id": job_id}, headers=headers)
+    response.raise_for_status()
+    run_id = response.json().get("run_id")
+    print(f"Triggered {job_name} integrated workflow (job_id={job_id}), run_id={run_id}")
+
+
+@wf.task(depends_on=["end"])
+def trigger_sales_order_integrated():
+    _trigger_job(sales_order_integrated_job_id, "sales_order")
+
+
+@wf.task(depends_on=["end"])
+def trigger_purchase_order_integrated():
+    _trigger_job(purchase_order_integrated_job_id, "purchase_order")
+
+
+@wf.task(depends_on=["end"])
+def trigger_fulfillment_integrated():
+    _trigger_job(fulfillment_integrated_job_id, "fulfillment")
+
+
+@wf.task(depends_on=["end"])
+def trigger_shipment_integrated():
+    _trigger_job(shipment_integrated_job_id, "shipment")
+
+
+ENTRYPOINT
+
+# Databricks notebook source
+import logging
+import os
+import sys
+
+from brickflow import Project, PypiTaskLibrary
+
+# import workflows.integrated 
+
+import workflows.landing
+import workflows.stage
+import workflows.pre_stage
+import workflows.shared_lib
+from workflows.shared_lib.shared_functions import ctx_workflows
+
+log = logging.getLogger(__name__)
+
+NIKE_PYPI_REPO = "https://artifactory.nike.com/artifactory/api/pypi/python-virtual/simple"
+
+os.environ["BRICKFLOW_AUTO_ADD_LIBRARIES"] = "false"
+
+
+def main() -> None:
+    try:
+        log.info(f"Current recursion limit: {sys.getrecursionlimit()}")
+        sys.setrecursionlimit(10000)
+    except Exception as e:
+        log.error(f"Error in Maximum Recursion Depth:{e}")
+
+    with Project(
+        "global_ilm",
+        git_repo="https://github.com/nike-dai-scpt/dai_scpt_foundation.git",
+        provider="github",
+        libraries=[
+            PypiTaskLibrary(
+                package=f"brickflows=={ctx_workflows.get('poetry_lock.package.brickflows.version')}",
+            ),
+            PypiTaskLibrary(
+                package=f"emea-inbound-sole-common-library=={ctx_workflows.get('poetry_lock.package.emea-inbound-sole-common-library.version')}",
+                repo=NIKE_PYPI_REPO,
+            ),
+            PypiTaskLibrary(
+                package=f"data-common-utilities=={ctx_workflows.get('poetry_lock.package.data-common-utilities.version')}",
+                repo=NIKE_PYPI_REPO,
+            ),
+            PypiTaskLibrary(
+                package=f"koheesio[pyspark_connect]=={ctx_workflows.get('poetry_lock.package.koheesio.version')}"
+            ),
+            PypiTaskLibrary(
+                package=f"spark-expectations=={ctx_workflows.get('poetry_lock.package.spark-expectations.version')}"
+            ),
+        ],
+    ) as proj:
+        proj.add_pkg(workflows.landing)
+        # proj.add_pkg(workflows.emea_landing)
+        proj.add_pkg(workflows.pre_stage)
+        proj.add_pkg(workflows.stage)
+        # proj.add_pkg(workflows.shared_lib)
+
+
+if __name__ == "__main__":
+    main()
+
+
+SPARK/PYTHON
+
+DBX_CONNECT (utils.py)
+
+import importlib.util
+
+import toml
+from pyspark.sql import SparkSession
+
+from spark.python.src.core.utils import SPARK_PYTHON_PROJECT_ROOT
+
+
+def is_databricks_connect_available() -> bool:
+    return importlib.util.find_spec("databricks.connect") is not None
+
+
+def get_sole_workspaces():
+    """
+    Get the sole workspaces from the product-info.toml.
+    """
+    toml_file_path = SPARK_PYTHON_PROJECT_ROOT.joinpath("../..").joinpath("product-info.toml")
+
+    # Load the TOML file
+    with open(toml_file_path, "r") as toml_file:
+        toml_data = toml.load(toml_file)
+
+    # Extract the sole workspaces
+    sole_workspaces = toml_data.get("sole", {}).get("sole_workspaces", [])
+
+    return sole_workspaces
+
+
+def get_databricks_connect_session() -> SparkSession:
+    if is_databricks_connect_available():
+        # use the DatabricksSession
+        from databricks.connect import DatabricksSession  # noqa: F401
+
+        sole_workspaces = get_sole_workspaces()
+        sole_profile = sole_workspaces[0] if len(sole_workspaces) > 0 else "default"
+        spark = DatabricksSession.builder.profile(sole_profile).validateSession(True).getOrCreate()
+
+        return spark
+    else:
+        # raise an error
+        raise RuntimeError(
+            "Databricks Connect is not installed; run `make switch-to-remote-spark` to use Databricks Connect."
+        )
+
+dq_checks.json
+
+{
+  "env_config": {
+    "catalog": "non_published_analytics",
+    "schema": "emea_inbound_ilm_derived",
+    "slack_secret_scope": "emea_inbound_dq_prod",
+    "slack_bot_token_key": "bot_token",
+    "git_token_key": "github_pat",
+    "slack_channel": "#squidsquad-support",
+    "cluster_policy_id": "E064568AAE00155B",
+    "sql_volume_path": "/Volumes/development/team_emea_inbound/dq"
+  },
+  "tables": [
+    {"table": "landing_mdi_tx_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 24},
+    {"table": "landing_mdi_tx_line_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 24},
+    {"table": "landing_mdi_tx_line_de_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 12},
+    {"table": "landing_mdi_tx_matrix_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 24},
+    {"table": "landing_mdi_tx_line_reference_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 24},
+    {"table": "landing_mdi_tx_line_measure_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 24},
+    {"table": "landing_mdi_tx_line_ptnr_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 24},
+    {"table": "landing_mdi_tx_event_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 12},
+    {"table": "landing_mdi_pack_event_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 12},
+    {"table": "landing_mdi_tx_line_event_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 12},
+    {"table": "landing_mdi_tx_line_date_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 24},
+    {"table": "landing_mdi_pack_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 24},
+    {"table": "landing_mdi_pack_measure_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 24},
+    {"table": "landing_mdi_note_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 24},
+    {"table": "landing_mdi_tx_packref_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 24},
+    {"table": "landing_mdi_tx_reference_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 24},
+    {"table": "landing_mdi_tx_ptnr_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 24},
+    {"table": "landing_mdi_tx_measure_t", "cdc_column": "LAST_MODIFIED_DATE", "freshness_hours": 24}
+  ]
+}
+
+CONFIG
+
+
+landing:
+    catalog: non_published_domain
+    schema: ilm
+    drop: false # If true, drop the table before creating it
+    truncate: false # If true, truncate the table before loading it
+    lookback_days: 2920
+    delta_lookback_days: 2
+
+pre_stage:
+    catalog: non_published_domain
+    schema: ilm
+    source_catalog: non_published_domain
+    source_schema: ilm
+    drop: false # If true, drop the table before creating it
+    truncate: false # If true, truncate the table before loading it
+    lookback_days: 2920
+    delta_lookback_days: 2
+    sql_paths:
+        arta_purchase_order_item_events: "sql/pre_stage/arta_purchase_order_item_events.sql"
+        arta_purchase_order_header_reference: "sql/pre_stage/arta_purchase_order_header_reference.sql"
+        arta_purchase_order_item_measure: "sql/pre_stage/arta_purchase_order_item_measure.sql"
+        arta_vendor_booking_item_measure: "sql/pre_stage/arta_vendor_booking_item_measure.sql"
+        arta_purchase_order_item_reference: "sql/pre_stage/arta_purchase_order_item_reference.sql"
+        arta_purchase_order_item_partner: "sql/pre_stage/arta_purchase_order_item_partner.sql"
+        arta_purchase_order_item_note: "sql/pre_stage/arta_purchase_order_item_note.sql"
+        arta_shipment_note: "sql/pre_stage/arta_shipment_note.sql"
+        arta_shipment_measure: "sql/pre_stage/arta_shipment_measure.sql"
+        arta_shipment_reference: "sql/pre_stage/arta_shipment_reference.sql"
+        arta_shipment_location: "sql/pre_stage/arta_shipment_location.sql"
+        arta_shipment_partner: "sql/pre_stage/arta_shipment_partner.sql"
+        arta_shipment_container_measure: "sql/pre_stage/arta_shipment_container_measure.sql"
+        arta_shipment_container_events: "sql/pre_stage/arta_shipment_container_events.sql"
+        arta_shipment_header_events: "sql/pre_stage/arta_shipment_header_events.sql"
+        arta_shipment_item_events: "sql/pre_stage/arta_shipment_item_events.sql"
+        arta_sales_order_item_measure: "sql/pre_stage/arta_sales_order_item_measure.sql"
+        arta_sales_order_item_date: "sql/pre_stage/arta_sales_order_item_date.sql"
+        arta_sales_order_item_reference: "sql/pre_stage/arta_sales_order_item_reference.sql"
+        arta_shipment_item_measure: "sql/pre_stage/arta_shipment_item_measure.sql"
+        arta_shipment_item_reference: "sql/pre_stage/arta_shipment_item_reference.sql"
+
+
+stage:
+    landing_catalog: non_published_domain
+    landing_schema: ilm
+    catalog: non_published_domain
+    schema: ilm
+    sql_paths:
+        arta_sales_order_item: "sql/stage/arta_sales_order_item.sql"
+        arta_purchase_order_item: "sql/stage/arta_purchase_order_item.sql"
+        arta_purchase_order_item_events: "sql/stage/arta_purchase_order_item_events.sql"
+        arta_shipment_header: "sql/stage/arta_shipment_header.sql"
+        arta_shipment_header_events: "sql/stage/arta_shipment_header_events.sql"
+        arta_delivery_item: "sql/stage/arta_delivery_item.sql"
+        ilm_shipment_item: "sql/stage/ilm_shipment_item.sql"
+
+
+integrated:
+    catalog: non_published_domain
+    schema: ilm
+
+SQL
+
+CLEANSE
+
+MERGE INTO {catalog}.{schema}.MDI_NOTE  a
+USING (
+	SELECT * from (
+		SELECT DISTINCT
+		    OPERATION_TYPE,
+			NOTE_SEQ_NUM,
+			RECORD_ALT_KEY,
+			TABLE_NAME,
+			PK1,
+			PK2,
+			PK3,
+			PK4,
+			PK5,
+			PK6,
+			PK7,
+			PK8,
+			PK9,
+			PK10,
+			NOTE_TYPE,
+			NOTE_CODE,
+			NOTE_TITLE,
+			NOTE,
+			IS_EDITABLE,
+			NOTE_MAX_LENGTH,
+			REASON_CODE,
+			IS_EDITABLE_IN_NT,
+			IS_ACTIVE,
+			SOURCE_OF_DATA,
+			CREATED_BY,
+			CREATED_DATE,
+			LAST_MODIFIED_BY,
+			LAST_MODIFIED_DATE,
+			ENTITY_ALT_KEY,
+			source_file,
+			record_created_tmst,
+			'Y' AS ActvInd,
+			COMMIT_TIMESTAMP AS SrcCrtTmst,
+			IFF(OPERATION_TYPE = 'I', NULL,COMMIT_TIMESTAMP) AS SrcUpdtTmst,
+			ROW_NUMBER() over (
+				PARTITION BY NOTE_SEQ_NUM, RECORD_ALT_KEY
+                ORDER BY LAST_MODIFIED_DATE desc, CASE WHEN OPERATION_TYPE = 'U' THEN 1 ELSE 0 END desc
+			) as rn
+	FROM {catalog}.{schema}.raw_MDI_NOTE
+	where record_created_tmst > '{checkpoint_literal}'
+	AND OPERATION_TYPE IN ('I','U')
+	) a where rn = 1
+) updates
+ON a.NOTE_SEQ_NUM= updates.NOTE_SEQ_NUM
+AND a.RECORD_ALT_KEY= updates.RECORD_ALT_KEY
+WHEN MATCHED THEN UPDATE SET
+	a.TABLE_NAME= updates.TABLE_NAME,
+	a.PK1= updates.PK1,
+	a.PK2= updates.PK2,
+	a.PK3= updates.PK3,
+	a.PK4= updates.PK4,
+	a.PK5= updates.PK5,
+	a.PK6= updates.PK6,
+	a.PK7= updates.PK7,
+	a.PK8= updates.PK8,
+	a.PK9= updates.PK9,
+	a.PK10= updates.PK10,
+	a.NOTE_TYPE= updates.NOTE_TYPE,
+	a.NOTE_CODE= updates.NOTE_CODE,
+	a.NOTE_TITLE= updates.NOTE_TITLE,
+	a.NOTE= updates.NOTE,
+	a.IS_EDITABLE= updates.IS_EDITABLE,
+	a.NOTE_MAX_LENGTH= updates.NOTE_MAX_LENGTH,
+	a.REASON_CODE= updates.REASON_CODE,
+	a.IS_EDITABLE_IN_NT= updates.IS_EDITABLE_IN_NT,
+	a.IS_ACTIVE= updates.IS_ACTIVE,
+	a.SOURCE_OF_DATA= updates.SOURCE_OF_DATA,
+	a.CREATED_BY= updates.CREATED_BY,
+	a.CREATED_DATE= updates.CREATED_DATE,
+	a.LAST_MODIFIED_BY= updates.LAST_MODIFIED_BY,
+	a.LAST_MODIFIED_DATE= updates.LAST_MODIFIED_DATE,
+	a.ENTITY_ALT_KEY = updates.ENTITY_ALT_KEY,
+	a.ActvInd='Y',
+	a.source_file= updates.source_file,
+	a.record_created_tmst= updates.record_created_tmst,
+	a.SrcUpdtTmst= updates.SrcUpdtTmst
+
+WHEN NOT MATCHED THEN INSERT (
+	NOTE_SEQ_NUM,
+	RECORD_ALT_KEY,
+	TABLE_NAME,
+	PK1,
+	PK2,
+	PK3,
+	PK4,
+	PK5,
+	PK6,
+	PK7,
+	PK8,
+	PK9,
+	PK10,
+	NOTE_TYPE,
+	NOTE_CODE,
+	NOTE_TITLE,
+	NOTE,
+	IS_EDITABLE,
+	NOTE_MAX_LENGTH,
+	REASON_CODE,
+	IS_EDITABLE_IN_NT,
+	IS_ACTIVE,
+	SOURCE_OF_DATA,
+	CREATED_BY,
+	CREATED_DATE,
+	LAST_MODIFIED_BY,
+	LAST_MODIFIED_DATE,
+	ENTITY_ALT_KEY,
+	source_file,
+	record_created_tmst,
+	ActvInd,
+	SrcCrtTmst,
+	SrcUpdtTmst
+	 )
+VALUES ( updates.NOTE_SEQ_NUM,
+	updates.RECORD_ALT_KEY,
+	updates.TABLE_NAME,
+	updates.PK1,
+	updates.PK2,
+	updates.PK3,
+	updates.PK4,
+	updates.PK5,
+	updates.PK6,
+	updates.PK7,
+	updates.PK8,
+	updates.PK9,
+	updates.PK10,
+	updates.NOTE_TYPE,
+	updates.NOTE_CODE,
+	updates.NOTE_TITLE,
+	updates.NOTE,
+	updates.IS_EDITABLE,
+	updates.NOTE_MAX_LENGTH,
+	updates.REASON_CODE,
+	updates.IS_EDITABLE_IN_NT,
+	updates.IS_ACTIVE,
+	updates.SOURCE_OF_DATA,
+	updates.CREATED_BY,
+	updates.CREATED_DATE,
+	updates.LAST_MODIFIED_BY,
+	updates.LAST_MODIFIED_DATE,
+	updates.ENTITY_ALT_KEY,
+	updates.source_file,
+	updates.record_created_tmst,
+	updates.ActvInd,
+	updates.SrcCrtTmst,
+	updates.SrcUpdtTmst
+);
+
+UPDATE {catalog}.{schema}.MDI_NOTE a
+SET
+  a.ActvInd = 'N',
+  a.SrcUpdtTmst = (
+    SELECT MAX(b.COMMIT_TIMESTAMP)
+    FROM {catalog}.{schema}.raw_MDI_NOTE b
+    WHERE b.OPERATION_TYPE = 'D'
+      AND b.NOTE_SEQ_NUM = a.NOTE_SEQ_NUM
+      AND b.RECORD_ALT_KEY = a.RECORD_ALT_KEY
+      AND b.record_created_tmst > '{checkpoint_literal}'
+  )
+WHERE EXISTS (
+    SELECT 1
+    FROM {catalog}.{schema}.raw_MDI_NOTE b
+    WHERE b.OPERATION_TYPE = 'D'
+      AND b.NOTE_SEQ_NUM = a.NOTE_SEQ_NUM
+      AND b.RECORD_ALT_KEY = a.RECORD_ALT_KEY
+      AND b.record_created_tmst > '{checkpoint_literal}'
+);
+
+PRE STAGE SALES_ORDER
+
+/*
+================================================================================
+Pre-Stage Table: pre_stage_arta_sales_order_item_measure_t
+================================================================================
+Description:
+    Aggregates sales order item measure data from landing table.
+
+Primary Keys (for deduplication):
+    - alt_key_tx
+    - alt_key_line
+
+Deduplicate Columns: ${deduplicate_columns}
+
+Source Tables:
+    - ${landing_table}
+
+Filter Conditions:
+    - tx_type = 'SALES_ORDER'
+================================================================================
+*/
+
+WITH delta_changes AS (
+    SELECT
+        alt_key_tx,
+        alt_key_line,
+        last_modified_date,
+        ${cdc_column} AS cdc_latest
+    FROM (
+    SELECT
+        *,
+            ROW_NUMBER() OVER (
+                PARTITION BY ${deduplicate_columns}
+                ORDER BY ${cdc_column} DESC
+            ) AS rn
+    FROM
+        ${landing_catalog}.${landing_schema}.${landing_table}
+    WHERE
+            ${cdc_column} >= CAST('${last_processed_tmst}' AS TIMESTAMP)
+            AND tx_type = 'SALES_ORDER'
+    ) pre_deduped
+    WHERE rn = 1
+),
+
+-- =============================================================================
+-- CTE: latest_by_measure_type - Latest record per (alt_key_tx, alt_key_line, measure_type)
+--      When ACTVIND='N', set value to NULL (cast per schema: DECIMAL(38, 9))
+-- =============================================================================
+latest_by_measure_type AS (
+    SELECT
+        alt_key_tx,
+        alt_key_line,
+        measure_type,
+        CASE WHEN UPPER(COALESCE(ACTVIND, 'Y')) = 'N' THEN CAST(NULL AS DECIMAL(38, 9)) ELSE value END AS value
+    FROM (
+        SELECT
+            alt_key_tx,
+            alt_key_line,
+            measure_type,
+            value,
+            ACTVIND,
+            ROW_NUMBER() OVER (
+                PARTITION BY alt_key_tx, alt_key_line, measure_type
+                ORDER BY ${cdc_column} DESC
+            ) AS rn
+        FROM
+            ${landing_catalog}.${landing_schema}.${landing_table} AS src
+        WHERE
+            tx_type = 'SALES_ORDER'
+            AND EXISTS (
+                SELECT 1 FROM delta_changes dc
+                WHERE dc.alt_key_tx = src.alt_key_tx AND dc.alt_key_line = src.alt_key_line
+            )
+    ) ranked
+    WHERE rn = 1
+),
+
+aggregated_data AS (
+    SELECT
+        driving_t.alt_key_tx,
+        driving_t.alt_key_line,
+        MAX(driving_t.last_modified_date) AS src_last_commit_tmst,
+        CAST(MAX(CASE WHEN LOWER(lbmt.measure_type) = 'shipped_quantity' THEN lbmt.value END) AS DECIMAL(38, 2)) AS shipped_quantity,
+        CAST(MAX(CASE WHEN LOWER(lbmt.measure_type) = 'so_confirmed_qty' THEN lbmt.value END) AS DECIMAL(38, 2)) AS so_confirmed_quantity,
+        MAX(driving_t.cdc_latest) AS latest_processed_landing_tmst
+    FROM
+        delta_changes AS driving_t
+    LEFT JOIN
+        latest_by_measure_type AS lbmt
+        ON driving_t.alt_key_tx = lbmt.alt_key_tx
+        AND driving_t.alt_key_line = lbmt.alt_key_line
+    GROUP BY
+        driving_t.alt_key_tx,
+        driving_t.alt_key_line
+)
+
+SELECT
+    alt_key_tx,
+    alt_key_line,
+    src_last_commit_tmst,
+    shipped_quantity,
+    so_confirmed_quantity,
+    latest_processed_landing_tmst
+FROM (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+    PARTITION BY alt_key_tx, alt_key_line
+    ORDER BY latest_processed_landing_tmst DESC
+        ) AS rn
+    FROM
+        aggregated_data
+) ranked
+WHERE rn = 1;
+
+
+STAGE
+
+/*
+================================================================================
+Stage Table: stage_arta_sales_order_item_t
+================================================================================
+Description:
+    This SQL transforms and stages sales order item data from MDI (Master Data
+    Integration) landing tables and pre-stage reference tables into a consolidated
+    stage table for downstream consumption.
+
+Primary Keys (for deduplication):
+    - alt_key_tx
+    - alt_key_line_summary
+    - alt_key_line_main
+
+Source Tables:
+    Landing:
+        - landing_mdi_tx_t              : Main transaction table (Sales Orders)
+        - landing_mdi_tx_line_t         : Transaction line items (SUMMARY & MAIN types)
+        - landing_mdi_tx_line_de_t      : Transaction line detail extensions
+    Pre-Stage:
+        - pre_stage_arta_sales_order_item_reference_t : SO item references
+        - pre_stage_arta_sales_order_item_measure_t   : Quantity measures
+        - pre_stage_arta_sales_order_item_date_t      : Customer requested dates
+
+CDC Strategy:
+    - Captures changes based on meta_load_tmst from landing tables
+    - Captures changes based on latest_processed_landing_tmst from pre-stage tables
+    - Uses LEAST() to determine the latest_processed_stage_tmst for watermarking
+
+Filter Conditions:
+    - tx_type = 'SALES_ORDER' (sales order transactions only)
+    - source_system IN ('PRD', 'CLN') - S4 physical_source_id 1 and 77 only
+    - sales_order_item_number IS NOT NULL (flexfield_var6 at header level)
+    - sales_order_item_variant_number IS NOT NULL (flexfield_var1 at item level)
+    - product_code IS NOT NULL (flexfield_var2)
+    - size_code IS NOT NULL (flexfield_var7)
+
+Active Indicator:
+    - active_indicator field is calculated by multiplying ACTVIND flags from all
+      source tables (1 if 'Y', 0 otherwise). Result is 1 only if ALL sources are active.
+
+Output:
+    Deduplicated sales order items with associated reference, measure,
+    and date data.
+================================================================================
+*/
+
+-- =============================================================================
+-- CTE: delta_changes
+-- Purpose: Capture all changed records from source tables since last processed
+--          timestamp and join all required tables
+-- =============================================================================
+WITH delta_changes AS (
+    SELECT
+        -- =====================================================================
+        -- Business Key Fields
+        -- =====================================================================
+        mdi_tx.source_tx_id AS sales_order_header_number,
+        mdi_tx_line_de_header.flexfield_var6 AS sales_order_item_number,
+        mdi_tx_line_de_item.flexfield_var1 AS sales_order_item_variant_number,
+        CAST(
+            CASE SUBSTRING(mdi_tx.source_system, 4, 3)
+                WHEN 'PRD' THEN '1'
+                WHEN 'PRA' THEN '3'
+                WHEN 'CLN' THEN '77'
+                ELSE '-1'
+            END AS INT
+        ) AS physical_source_id,
+
+        -- =====================================================================
+        -- Product Information
+        -- =====================================================================
+        mdi_tx_line_de_item.flexfield_var2 AS product_code,
+        mdi_tx_line_de_item.flexfield_var7 AS size_code,
+
+        -- =====================================================================
+        -- Primary Keys [PK] (for deduplication)
+        -- =====================================================================
+        mdi_tx.alt_key_tx,                                                          -- [PK]
+        mdi_tx_line_summary.alt_key_line AS alt_key_line_summary,                   -- [PK]
+        mdi_tx_line_main.alt_key_line AS alt_key_line_main,                         -- [PK]
+
+        -- =====================================================================
+        -- Active Indicator (calculated from all source ACTVIND flags)
+        -- Result is 1 if ALL sources are active ('Y'), 0 otherwise
+        -- =====================================================================
+        CASE WHEN UPPER(COALESCE(mdi_tx.ACTVIND, 'Y')) = 'Y' THEN 1 ELSE 0 END *
+        CASE WHEN UPPER(COALESCE(mdi_tx_line_summary.ACTVIND, 'Y')) = 'Y' THEN 1 ELSE 0 END *
+        CASE WHEN UPPER(COALESCE(mdi_tx_line_main.ACTVIND, 'Y')) = 'Y' THEN 1 ELSE 0 END *
+        CASE WHEN UPPER(COALESCE(mdi_tx_line_de_header.ACTVIND, 'Y')) = 'Y' THEN 1 ELSE 0 END *
+        CASE WHEN UPPER(COALESCE(mdi_tx_line_de_item.ACTVIND, 'Y')) = 'Y' THEN 1 ELSE 0 END AS active_indicator,
+
+        -- =====================================================================
+        -- Reference Information (from pre_stage_arta_sales_order_item_reference_t)
+        -- =====================================================================
+            psi_reference.factory_vas_indicator,
+            psi_reference.divert_case_id,
+            psi_reference.divert_case_type,
+            psi_reference.divert_case_status,
+            psi_reference.musical_size_run_indicator,
+            psi_reference.so_line_status,
+            psi_reference.so_launch_indicator,
+            psi_reference.so_ean_upc,
+            psi_reference.so_cust_invoice_number,
+            psi_reference.so_material_category_code,
+            psi_reference.so_requirement_category_code,
+
+        -- =====================================================================
+        -- Quantity Measures (from pre_stage_arta_sales_order_item_measure_t)
+        -- =====================================================================
+            psi_measure.shipped_quantity,
+            psi_measure.so_confirmed_quantity,
+
+        -- =====================================================================
+        -- Date Information (from pre_stage_arta_sales_order_item_date_t)
+        -- =====================================================================
+            so_item_date.customer_requested_delivery_date,
+
+        -- =====================================================================
+        -- CDC Timestamps (for tracking changes from each source)
+        -- =====================================================================
+        mdi_tx.${landing_commit_tmst_col} AS mdi_tx_last_commit_tmst,
+        mdi_tx_line_summary.${landing_commit_tmst_col} AS mdi_tx_line_summary_last_commit_tmst,
+        mdi_tx_line_main.${landing_commit_tmst_col} AS mdi_tx_line_main_last_commit_tmst,
+        mdi_tx_line_de_header.${landing_commit_tmst_col} AS mdi_tx_line_de_header_last_commit_tmst,
+        mdi_tx_line_de_item.${landing_commit_tmst_col} AS mdi_tx_line_de_item_last_commit_tmst,
+        CAST(psi_reference.${pre_stage_commit_tmst_col} AS TIMESTAMP) AS psi_reference_latest_processed_landing_tmst,
+        CAST(psi_measure.${pre_stage_commit_tmst_col} AS TIMESTAMP) AS psi_measure_latest_processed_landing_tmst,
+        CAST(so_item_date.${pre_stage_commit_tmst_col} AS TIMESTAMP) AS so_item_date_latest_processed_landing_tmst,
+
+        -- =====================================================================
+        -- CDC Timestamp: Used for watermarking and incremental processing
+        -- latest_processed_stage_tmst: Minimum of all source timestamps (conservative)
+        -- =====================================================================
+        CAST(
+            LEAST(
+                cast(mdi_tx.${landing_commit_tmst_col} as timestamp),
+                cast(mdi_tx_line_summary.${landing_commit_tmst_col} as timestamp),
+                cast(mdi_tx_line_main.${landing_commit_tmst_col} as timestamp),
+                cast(mdi_tx_line_de_header.${landing_commit_tmst_col} as timestamp),
+                cast(mdi_tx_line_de_item.${landing_commit_tmst_col} as timestamp),
+                cast(psi_reference.${pre_stage_commit_tmst_col} as timestamp),
+                cast(psi_measure.${pre_stage_commit_tmst_col} as timestamp),
+                cast(so_item_date.${pre_stage_commit_tmst_col} as timestamp)
+            ) AS TIMESTAMP
+        ) AS latest_processed_stage_tmst
+
+    FROM
+        ${landing_catalog}.${landing_schema}.mdi_tx AS mdi_tx
+
+        -- =====================================================================
+        -- INNER JOIN: SUMMARY line type (required for SO item structure)
+        -- =====================================================================
+        INNER JOIN ${landing_catalog}.${landing_schema}.mdi_tx_line AS mdi_tx_line_summary
+            ON mdi_tx.alt_key_tx = mdi_tx_line_summary.alt_key_tx
+            AND mdi_tx_line_summary.line_type = 'SUMMARY'
+
+        -- =====================================================================
+        -- INNER JOIN: MAIN line type (child of SUMMARY, required for detail)
+        -- =====================================================================
+        INNER JOIN ${landing_catalog}.${landing_schema}.mdi_tx_line AS mdi_tx_line_main
+            ON mdi_tx_line_summary.alt_key_tx = mdi_tx_line_main.alt_key_tx
+            AND mdi_tx_line_summary.alt_key_line = mdi_tx_line_main.parent_line_key
+            AND mdi_tx_line_main.line_type = 'MAIN'
+
+        -- =====================================================================
+        -- INNER JOIN: Detail extension at SUMMARY level (header level - SO item number)
+        -- Required: flexfield_var6 (SO item number)
+        -- =====================================================================
+        INNER JOIN ${landing_catalog}.${landing_schema}.mdi_tx_line_de AS mdi_tx_line_de_header
+            ON mdi_tx_line_summary.alt_key_tx = mdi_tx_line_de_header.alt_key_tx
+            AND mdi_tx_line_summary.alt_key_line = mdi_tx_line_de_header.alt_key_line
+            AND mdi_tx_line_de_header.flexfield_var6 IS NOT NULL
+
+        -- =====================================================================
+        -- INNER JOIN: Detail extension at MAIN level (item level - variant, product, size)
+        -- Required: flexfield_var1 (variant), flexfield_var2 (product), flexfield_var7 (size)
+        -- =====================================================================
+        INNER JOIN ${landing_catalog}.${landing_schema}.mdi_tx_line_de AS mdi_tx_line_de_item
+            ON mdi_tx_line_main.alt_key_tx = mdi_tx_line_de_item.alt_key_tx
+            AND mdi_tx_line_main.alt_key_line = mdi_tx_line_de_item.alt_key_line
+            AND mdi_tx_line_de_item.flexfield_var1 IS NOT NULL
+            AND mdi_tx_line_de_item.flexfield_var2 IS NOT NULL
+            AND mdi_tx_line_de_item.flexfield_var7 IS NOT NULL
+
+        -- =====================================================================
+        -- LEFT JOIN: SO item references (optional)
+        -- =====================================================================
+        LEFT JOIN ${pre_stage_catalog}.${pre_stage_schema}.pre_stage_arta_sales_order_item_reference_t AS psi_reference
+            ON mdi_tx_line_summary.alt_key_tx = psi_reference.alt_key_tx
+            AND mdi_tx_line_summary.alt_key_line = psi_reference.alt_key_line
+
+        -- =====================================================================
+        -- LEFT JOIN: Quantity measures (optional)
+        -- =====================================================================
+        LEFT JOIN ${pre_stage_catalog}.${pre_stage_schema}.pre_stage_arta_sales_order_item_measure_t AS psi_measure
+            ON mdi_tx_line_main.alt_key_tx = psi_measure.alt_key_tx
+            AND mdi_tx_line_main.alt_key_line = psi_measure.alt_key_line
+
+        -- =====================================================================
+        -- LEFT JOIN: Customer requested dates (optional)
+        -- =====================================================================
+        LEFT JOIN ${pre_stage_catalog}.${pre_stage_schema}.pre_stage_arta_sales_order_item_date_t AS so_item_date
+            ON mdi_tx_line_summary.alt_key_tx = so_item_date.alt_key_tx
+            AND mdi_tx_line_summary.alt_key_line = so_item_date.alt_key_line
+
+    WHERE
+        -- Filter for sales order transactions only
+        mdi_tx.tx_type = 'SALES_ORDER'
+        -- Filter for S4 (physical_source_id 1 and 77 only)
+        AND SUBSTRING(mdi_tx.source_system, 4, 3) IN ('PRD', 'PRA', 'CLN')
+        -- CDC filter: capture changes since last processed timestamp
+        AND (
+                mdi_tx.${landing_commit_tmst_col} >= '${last_processed_tmst}'
+            OR mdi_tx_line_summary.${landing_commit_tmst_col} >= '${last_processed_tmst}'
+            OR mdi_tx_line_main.${landing_commit_tmst_col} >= '${last_processed_tmst}'
+            OR mdi_tx_line_de_header.${landing_commit_tmst_col} >= '${last_processed_tmst}'
+            OR mdi_tx_line_de_item.${landing_commit_tmst_col} >= '${last_processed_tmst}'
+            OR psi_reference.${pre_stage_commit_tmst_col} >= '${last_processed_tmst}'
+            OR so_item_date.${pre_stage_commit_tmst_col} >= '${last_processed_tmst}'
+            OR psi_measure.${pre_stage_commit_tmst_col} >= '${last_processed_tmst}'
+        )
+)
+
+-- =============================================================================
+-- Final SELECT: Output all columns with deduplication
+-- =============================================================================
+SELECT
+    -- Business Key Fields
+    sales_order_header_number,
+    sales_order_item_number,
+    sales_order_item_variant_number,
+    physical_source_id,
+
+    -- Product Information
+    product_code,
+    size_code,
+
+    -- Primary Keys [PK] (for deduplication)
+    alt_key_tx,                             -- [PK]
+    alt_key_line_summary,                   -- [PK]
+    alt_key_line_main,                      -- [PK]
+
+    -- Active Indicator
+    active_indicator,
+
+    -- Reference Information
+    factory_vas_indicator,
+    divert_case_id,
+    divert_case_type,
+    divert_case_status,
+    musical_size_run_indicator,
+    so_line_status,
+    so_launch_indicator,
+    so_ean_upc,
+    so_cust_invoice_number,
+    so_material_category_code,
+    so_requirement_category_code,
+
+    -- Quantity Measures
+    shipped_quantity,
+    so_confirmed_quantity,
+
+    -- Date Information
+    customer_requested_delivery_date,
+
+    -- Source Commit Timestamp
+    src_last_commit_tmst,
+    latest_processed_stage_tmst
+
+FROM (
+    SELECT
+        *,
+        mdi_tx_line_de_header_last_commit_tmst AS src_last_commit_tmst,
+        -- =====================================================================
+        -- Deduplication: Keep one record per business key combination.
+        -- Resolves multiple alt_key_line for the same SO item.
+        -- Prefers active records, then latest timestamp.
+        -- =====================================================================
+        ROW_NUMBER() OVER (
+            PARTITION BY
+                sales_order_header_number,
+                sales_order_item_number,
+                sales_order_item_variant_number,
+                physical_source_id
+            ORDER BY
+                active_indicator DESC,
+                latest_processed_stage_tmst DESC
+        ) AS rn
+    FROM
+        delta_changes
+) ranked
+WHERE rn = 1
+
+STAGE (ARTA DELIVERY_ITEM)
+
+/*
+================================================================================
+Stage Table: stage_arta_delivery_item_t
+================================================================================
+Description:
+    This SQL transforms and stages delivery item data from MDI (Master Data
+    Integration) landing tables and pre-stage shipment reference tables into a
+    consolidated stage table for downstream consumption. The data represents
+    delivery line items associated with shipments.
+
+Primary Keys (for deduplication):
+    - alt_key_tx
+    - alt_key_line_summary
+    - alt_key_line_main
+
+Source Tables:
+    Landing:
+        - landing_mdi_tx_t              : Main transaction table (Shipments)
+        - landing_mdi_tx_line_t         : Transaction line items (SUMMARY & MAIN types)
+        - landing_mdi_tx_line_de_t      : Transaction line detail extensions
+    Pre-Stage:
+        - pre_stage_arta_shipment_partner_t      : Partner info (EMEA flag filter)
+        - pre_stage_arta_shipment_item_measure_t : Shipment item quantity measures
+        - pre_stage_arta_shipment_item_reference_t : Shipment item references
+
+CDC Strategy:
+    - Captures changes based on meta_load_tmst from landing tables
+    - Captures changes based on latest_processed_landing_tmst from pre-stage tables
+    - Uses LEAST() to determine the latest_processed_stage_tmst for watermarking
+
+Note on Primary Key Logic:
+    - inbound_delivery_item_number: Populated only for S4 (CLN) source
+    - inbound_delivery_schedule_line_number: Populated only for AFS (PRD) source
+    - This reflects different delivery document structures between systems
+
+Filter Conditions:
+    - tx_type = 'SHIPMENT' (shipment transactions only)
+    - source_system IN ('PRD', 'CLN') - S4 physical_source_id 1 and 77 only
+    - inbound_delivery_header_number IS NOT NULL (flexfield_var3)
+    - inbound_delivery_item/schedule_line_number IS NOT NULL (flexfield_var4)
+    - product_code IS NOT NULL (flexfield_var2)
+    - size_code IS NOT NULL (flexfield_var7)
+
+Active Indicator:
+    - active_indicator field is calculated by multiplying ACTVIND flags from all
+      source tables (1 if 'Y', 0 otherwise). Result is 1 only if ALL sources are active.
+
+Output:
+    Deduplicated delivery items with associated purchase order references,
+    quantity measures, and shipment reference data.
+================================================================================
+*/
+
+-- =============================================================================
+-- CTE: delta_changes
+-- Purpose: Capture all changed records from source tables since last processed
+--          timestamp and join all required tables
+-- =============================================================================
+WITH delta_changes AS (
+    SELECT
+        -- =====================================================================
+        -- Business Key Fields
+        -- =====================================================================
+        mdi_tx.source_tx_id AS inbound_shipment_header_number,
+        mdi_tx_line_de_item.flexfield_var3 AS inbound_delivery_header_number,
+        -- inbound_delivery_item_number: Used for S4 (CLN) source system
+        CAST(
+            CASE
+                WHEN SUBSTRING(mdi_tx.source_system, 4, 3) = 'CLN' THEN mdi_tx_line_de_item.flexfield_var4
+                ELSE '0'
+            END AS STRING
+        ) AS inbound_delivery_item_number,
+        -- inbound_delivery_schedule_line_number: Used for AFS (PRD) source system
+        CAST(
+            CASE
+                WHEN SUBSTRING(mdi_tx.source_system, 4, 3) = 'PRD' THEN mdi_tx_line_de_item.flexfield_var4
+                ELSE '0'
+            END AS STRING
+        ) AS inbound_delivery_schedule_line_number,
+        CAST(
+            CASE SUBSTRING(mdi_tx.source_system, 4, 3)
+                WHEN 'PRD' THEN '1'
+                WHEN 'PRA' THEN '3'
+                WHEN 'CLN' THEN '77'
+                ELSE '-1'
+            END AS INT
+        ) AS physical_source_id,
+
+        -- =====================================================================
+        -- Product Information
+        -- =====================================================================
+        mdi_tx_line_de_item.flexfield_var2 AS product_code,
+        mdi_tx_line_de_item.flexfield_var7 AS size_code,
+
+        -- =====================================================================
+        -- Primary Keys [PK] (for deduplication)
+        -- =====================================================================
+        mdi_tx.alt_key_tx AS alt_key_tx,                                                        -- [PK]
+        mdi_tx_line_summary.alt_key_line AS alt_key_line_summary,                               -- [PK]
+        mdi_tx_line_main.alt_key_line AS alt_key_line_main,                                     -- [PK]
+
+        -- =====================================================================
+        -- Active Indicator (calculated from all source ACTVIND flags)
+        -- Result is 1 if ALL sources are active ('Y'), 0 otherwise
+        -- =====================================================================
+        CASE WHEN UPPER(COALESCE(mdi_tx.ACTVIND, 'Y')) = 'Y' THEN 1 ELSE 0 END *
+        CASE WHEN UPPER(COALESCE(mdi_tx_line_summary.ACTVIND, 'Y')) = 'Y' THEN 1 ELSE 0 END *
+        CASE WHEN UPPER(COALESCE(mdi_tx_line_main.ACTVIND, 'Y')) = 'Y' THEN 1 ELSE 0 END *
+        CASE WHEN UPPER(COALESCE(mdi_tx_line_de_item.ACTVIND, 'Y')) = 'Y' THEN 1 ELSE 0 END AS active_indicator,
+
+        -- =====================================================================
+        -- Purchase Order Reference
+        -- =====================================================================
+        mdi_tx_line_summary.source_po_num AS purchase_order_header_number,
+        CAST(mdi_tx_line_de_item.flexfield_var8 AS INT) AS purchase_order_item_number,
+        -- purchase_order_item_variant_number: Only available for S4 (CLN)
+        CAST(
+            CASE
+                WHEN SUBSTRING(mdi_tx.source_system, 4, 3) = 'CLN' THEN psi_reference.purchase_order_item_variant_number
+                ELSE '0'
+            END AS INT
+        ) AS purchase_order_item_variant_number,
+
+        -- =====================================================================
+        -- Quantity Measures (from pre_stage_arta_shipment_item_measure_t)
+        -- =====================================================================
+        psi_measure.shipped_quantity AS delivery_shipped_quantity,
+        psi_measure.received_quantity AS delivery_received_quantity,
+        psi_measure_header.reported_volume AS delivery_reported_volume,
+        psi_measure_header.reported_delivery_header_gross_weight,
+        psi_measure_header.reported_delivery_header_total_cartons,
+        psi_measure.reported_delivery_item_shipped_quantity,
+
+        -- =====================================================================
+        -- Reference Information (from pre_stage_arta_shipment_item_reference_t)
+        -- =====================================================================
+        psi_reference.import_code_number AS import_code_number,
+
+        -- =====================================================================
+        -- CDC Timestamps (for tracking changes from each source)
+        -- =====================================================================
+        mdi_tx.${landing_commit_tmst_col} AS mdi_tx_last_commit_tmst,
+        mdi_tx_line_summary.${landing_commit_tmst_col} AS mdi_tx_line_summary_last_commit_tmst,
+        mdi_tx_line_main.${landing_commit_tmst_col} AS mdi_tx_line_main_last_commit_tmst,
+        mdi_tx_line_de_item.${landing_commit_tmst_col} AS mdi_tx_line_de_item_last_commit_tmst,
+        CAST(psi_prtn.${pre_stage_commit_tmst_col} AS TIMESTAMP) AS psi_prtn_latest_processed_landing_tmst,
+        CAST(psi_measure.${pre_stage_commit_tmst_col} AS TIMESTAMP) AS psi_measure_latest_processed_landing_tmst,
+        CAST(psi_measure_header.${pre_stage_commit_tmst_col} AS TIMESTAMP) AS psi_measure_header_latest_processed_landing_tmst,
+        CAST(psi_reference.${pre_stage_commit_tmst_col} AS TIMESTAMP) AS psi_reference_latest_processed_landing_tmst,
+
+        -- =========================================================================
+        -- CDC Timestamp: Used for watermarking and incremental processing
+        -- latest_processed_stage_tmst: Minimum of all source timestamps (conservative)
+        -- =========================================================================
+        CAST(
+            LEAST(
+                cast(mdi_tx.${landing_commit_tmst_col} as timestamp),
+                cast(mdi_tx_line_summary.${landing_commit_tmst_col} as timestamp),
+                cast(mdi_tx_line_main.${landing_commit_tmst_col} as timestamp),
+                cast(mdi_tx_line_de_item.${landing_commit_tmst_col} as timestamp),
+                cast(psi_prtn.${pre_stage_commit_tmst_col} as timestamp),
+                cast(psi_measure.${pre_stage_commit_tmst_col} as timestamp),
+                cast(psi_measure_header.${pre_stage_commit_tmst_col} as timestamp),
+                cast(psi_reference.${pre_stage_commit_tmst_col} as timestamp)
+            ) AS TIMESTAMP
+        ) AS latest_processed_stage_tmst
+
+    FROM
+        ${landing_catalog}.${landing_schema}.mdi_tx AS mdi_tx
+
+        -- =====================================================================
+        -- INNER JOIN: SUMMARY line type (required for delivery item structure)
+        -- =====================================================================
+        INNER JOIN ${landing_catalog}.${landing_schema}.mdi_tx_line AS mdi_tx_line_summary
+            ON mdi_tx.alt_key_tx = mdi_tx_line_summary.alt_key_tx
+            AND mdi_tx_line_summary.line_type = 'SUMMARY'
+
+        -- =====================================================================
+        -- INNER JOIN: MAIN line type (child of SUMMARY, required for detail)
+        -- =====================================================================
+        INNER JOIN ${landing_catalog}.${landing_schema}.mdi_tx_line AS mdi_tx_line_main
+            ON mdi_tx_line_summary.alt_key_tx = mdi_tx_line_main.alt_key_tx
+            AND mdi_tx_line_summary.alt_key_line = mdi_tx_line_main.parent_line_key
+            AND mdi_tx_line_main.line_type = 'MAIN'
+
+        -- =====================================================================
+        -- INNER JOIN: Detail extension at MAIN level (item level - delivery info)
+        -- Required: flexfield_var3 (delivery header), flexfield_var4 (item/schedule),
+        --           flexfield_var2 (product_code), flexfield_var7 (size_code)
+        -- =====================================================================
+        INNER JOIN ${landing_catalog}.${landing_schema}.mdi_tx_line_de AS mdi_tx_line_de_item
+            ON mdi_tx_line_main.alt_key_tx = mdi_tx_line_de_item.alt_key_tx
+            AND mdi_tx_line_main.alt_key_line = mdi_tx_line_de_item.alt_key_line
+            AND mdi_tx_line_de_item.flexfield_var3 IS NOT NULL
+            AND mdi_tx_line_de_item.flexfield_var4 IS NOT NULL
+            AND mdi_tx_line_de_item.flexfield_var2 IS NOT NULL
+            AND mdi_tx_line_de_item.flexfield_var7 IS NOT NULL
+
+        -- =====================================================================
+        -- LEFT JOIN: Partner info for shipments
+        -- =====================================================================
+        LEFT JOIN ${pre_stage_catalog}.${pre_stage_schema}.pre_stage_arta_shipment_partner_t AS psi_prtn
+            ON mdi_tx.alt_key_tx = psi_prtn.alt_key_tx
+
+        -- =====================================================================
+        -- LEFT JOIN: Item-level quantity measures (measures may not exist)
+        -- =====================================================================
+        LEFT JOIN ${pre_stage_catalog}.${pre_stage_schema}.pre_stage_arta_shipment_item_measure_t AS psi_measure
+            ON mdi_tx_line_main.alt_key_tx = psi_measure.alt_key_tx
+            AND mdi_tx_line_main.alt_key_line = psi_measure.alt_key_line
+
+        -- =====================================================================
+        -- LEFT JOIN: Header-level quantity measures (at SUMMARY level)
+        -- =====================================================================
+        LEFT JOIN ${pre_stage_catalog}.${pre_stage_schema}.pre_stage_arta_shipment_item_measure_t AS psi_measure_header
+            ON mdi_tx_line_summary.alt_key_tx = psi_measure_header.alt_key_tx
+            AND mdi_tx_line_summary.alt_key_line = psi_measure_header.alt_key_line
+
+        -- =====================================================================
+        -- LEFT JOIN: Shipment item references (import code, PO variant)
+        -- =====================================================================
+        LEFT JOIN ${pre_stage_catalog}.${pre_stage_schema}.pre_stage_arta_shipment_item_reference_t AS psi_reference
+            ON mdi_tx_line_main.alt_key_tx = psi_reference.alt_key_tx
+            AND mdi_tx_line_main.alt_key_line = psi_reference.alt_key_line
+
+    WHERE
+        -- Filter for shipment transactions only
+        mdi_tx.tx_type = 'SHIPMENT'
+        -- Filter for S4 (physical_source_id 1 and 77 only)
+        AND SUBSTRING(mdi_tx.source_system, 4, 3) IN ('PRD', 'PRA', 'CLN')
+        -- CDC filter: capture changes since last processed timestamp
+        AND (
+            mdi_tx.${landing_commit_tmst_col} >= '${last_processed_tmst}'
+            OR mdi_tx_line_summary.${landing_commit_tmst_col} >= '${last_processed_tmst}'
+            OR mdi_tx_line_main.${landing_commit_tmst_col} >= '${last_processed_tmst}'
+            OR mdi_tx_line_de_item.${landing_commit_tmst_col} >= '${last_processed_tmst}'
+            OR psi_measure.${pre_stage_commit_tmst_col} >= '${last_processed_tmst}'
+            OR psi_reference.${pre_stage_commit_tmst_col} >= '${last_processed_tmst}'
+        )
+)
+
+-- =============================================================================
+-- Final SELECT: Output all columns with deduplication
+-- =============================================================================
+SELECT
+    -- Business Key Fields
+    inbound_shipment_header_number,
+    inbound_delivery_header_number,
+    inbound_delivery_item_number,
+    inbound_delivery_schedule_line_number,
+    physical_source_id,
+
+    -- Product Information
+    product_code,
+    size_code,
+
+    -- Primary Keys [PK] (for deduplication)
+    alt_key_tx,                                     -- [PK]
+    alt_key_line_summary,                           -- [PK]
+    alt_key_line_main,                              -- [PK]
+
+    -- Active Indicator
+    active_indicator,
+
+    -- Purchase Order Reference
+    purchase_order_header_number,
+    purchase_order_item_number,
+    purchase_order_item_variant_number,
+
+    -- Quantity Measures
+    delivery_shipped_quantity,
+    delivery_received_quantity,
+    delivery_reported_volume,
+    reported_delivery_header_gross_weight,
+    reported_delivery_header_total_cartons,
+    reported_delivery_item_shipped_quantity,
+
+    -- Reference Information
+    import_code_number,
+
+    -- Source Commit Timestamp
+    src_last_commit_tmst,
+    latest_processed_stage_tmst
+
+FROM (
+    SELECT
+        *,
+        mdi_tx_line_de_item_last_commit_tmst AS src_last_commit_tmst,
+        -- =========================================================================
+        -- Deduplication: Keep one record per business key combination.
+        -- Resolves multiple alt_key_line for the same delivery item.
+        -- Prefers active records, then latest timestamp.
+        -- =========================================================================
+        ROW_NUMBER() OVER (
+            PARTITION BY
+                inbound_shipment_header_number,
+                inbound_delivery_header_number,
+                inbound_delivery_item_number,
+                inbound_delivery_schedule_line_number,
+                physical_source_id
+            ORDER BY
+                active_indicator DESC,
+                latest_processed_stage_tmst DESC
+        ) AS rn
+    FROM
+        delta_changes
+) ranked
+WHERE rn = 1
+
+SPARK ->PYTHON->SOURCE ->CORE (CONSTANT,TASK_BASE,UTILS.PY)
+
+CONSTANT
+
+# ILM ARTA Constants
+SRC_MDI_TX_OBJ = "mdi_tx_t"
+LAND_MDI_TX_TBL = "mdi_tx"
+SRC_MDI_TX_LINE_OBJ = "mdi_tx_line_t"
+LAND_MDI_TX_LINE_TBL = "mdi_tx_line"
+SRC_MDI_TX_LINE_DE_OBJ = "mdi_tx_line_de_t"
+LAND_MDI_TX_LINE_DE_TBL = "mdi_tx_line_de"
+SRC_MDI_TX_MATRIX_OBJ = "mdi_tx_matrix_t"
+LAND_MDI_TX_MATRIX_T = "mdi_tx_matrix"
+SRC_MDI_TX_LINE_REFERENCE_OBJ = "mdi_tx_line_reference_t"
+LAND_MDI_TX_LINE_REFERENCE_TBL = "mdi_tx_line_reference"
+SRC_MDI_TX_LINE_MEASURE_OBJ = "mdi_tx_line_measure_t"
+LAND_MDI_TX_LINE_MEASURE_TBL = "mdi_tx_line_measure"
+SRC_MDI_TX_LINE_PTNR_OBJ = "mdi_tx_line_ptnr_t"
+LAND_MDI_TX_LINE_PTNR_TBL = "mdi_tx_line_ptnr"
+SRC_MDI_TX_EVENT_OBJ = "mdi_tx_event_t"
+LAND_MDI_TX_EVENT_TBL = "mdi_tx_event"
+SRC_MDI_PACK_EVENT_OBJ = "mdi_pack_event_t"
+LAND_MDI_PACK_EVENT_TBL = "mdi_pack_event"
+SRC_MDI_TX_LINE_EVENT_OBJ = "mdi_tx_line_event_t"
+LAND_MDI_TX_LINE_EVENT_TBL = "mdi_tx_line_event"
+SRC_MDI_TX_LINE_DATE_OBJ = "mdi_tx_line_date_t"
+LAND_MDI_TX_LINE_DATE_TBL = "mdi_tx_line_date"
+SRC_MDI_PACK_OBJ = "mdi_pack_t"
+LAND_MDI_PACK_TBL = "mdi_pack"
+SRC_MDI_PACK_MEASURE_OBJ = "mdi_pack_measure_t"
+LAND_MDI_PACK_MEASURE_TBL = "mdi_pack_measure"
+SRC_MDI_NOTE_OBJ = "mdi_note_t"
+LAND_MDI_NOTE_TBL = "mdi_note"
+SRC_MDI_TX_PACKREF_OBJ = "mdi_tx_packref_t"
+LAND_MDI_TX_PACKREF_TBL = "mdi_tx_packref"
+SRC_MDI_TX_REFERENCE_OBJ = "mdi_tx_reference_t"
+LAND_MDI_TX_REFERENCE_TBL = "mdi_tx_reference"
+SRC_MDI_TX_PTNR_OBJ = "mdi_tx_ptnr_t"
+LAND_MDI_TX_PTNR_TBL = "mdi_tx_ptnr"
+SRC_MDI_TX_MEASURE_OBJ = "mdi_tx_measure_t"
+LAND_MDI_TX_MEASURE_TBL = "mdi_tx_measure"
+SRC_MDI_TX_LOCATION_OBJ = "mdi_tx_location_t"
+LAND_MDI_TX_LOCATION_TBL = "mdi_tx_location"
+
+SRC_MDI_PTNR_OBJ = "mdi_ptnr_t"
+
+# ILM PEGA Constants
+SRC_PEGA_CASE_OBJ = "CASE_V"
+LAND_PEGA_CASE_TBL = "landing_pega_case_t"
+SRC_PEGA_CASE_NOTE_OBJ = "CASENOTE_T"
+LAND_PEGA_CASE_NOTE_TBL = "landing_pega_case_note_t"
+STG_PEGA_CASE_DATA_TBL = "stage_pega_case_data_t"
+
+# ILM SAP Constants
+SRC_PO_ITM_T_OBJ = "PO_ITM_T"
+LAND_PO_ITM_TBL = "landing_po_itm_t"
+SRC_PO_HDR_T_OBJ = "PO_HDR_T"
+LAND_PO_HDR_TBL = "landing_po_hdr_t"
+SRC_SAP_IB_SHPMT_OBJ = "IB_SHPMT_T"
+LAND_SAP_IB_SHPMT_TBL = "landing_sap_ib_shpmt_t"
+SRC_SAP_IB_SHPMTCNTNR_OBJ = "IB_SHPMTCNTNR_T"
+LAND_SAP_IB_SHPMTCNTNR_TBL = "landing_sap_ib_shpmtcntnr_t"
+SRC_SAP_IB_SHPMTDLVRY_OBJ = "IB_SHPMTDLVRY_TBL"
+LAND_SAP_IB_SHPMTDLVRY_TBL = "landing_sap_ib_shpmtdlvry_t"
+SRC_SAP_IB_DLVRYITM_OBJ = "IB_DLVRYITM_T"
+LAND_SAP_IB_DLVRYITM_TBL = "landing_sap_ib_dlvryitm_t"
+SRC_SAP_SO_HDR_ADDR_OBJ = "SO_HDRADDR_T"
+LAND_SAP_SO_HDR_ADDR_TBL = "landing_sap_so_hdraddr_t"
+SRC_SAP_SO_HDR_OBJ = "SO_HDR_T"
+LAND_SAP_SO_HDR_TBL = "landing_sap_so_hdr_t"
+SRC_SAP_SO_ITM_AMT_OBJ = "SO_ITMAMT_T"
+LAND_SAP_SO_ITM_AMT_TBL = "landing_sap_so_itmamt_t"
+SRC_SAP_SO_ITM_OBJ = "SO_ITM_T"
+LAND_SAP_SO_ITM_TBL = "landing_sap_so_itm_t"
+SRC_SAP_SO_SCHEDLN_OBJ = "SO_SCHEDLN_T"
+LAND_SAP_SO_SCHEDLN_TBL = "landing_sap_so_schedln_t"
+SRC_IB_SHPMTADDR_OBJ = "ib_shpmtaddr_t"
+LAND_IB_SHPMTADDR_TBL = "landing_sap_ib_shpmtaddr_t"
+SRC_IB_SHPMT_CNTR_CRTN_OBJ = "IB_SHPMTCNTNRCRTN_ITEM_T"
+LAND_IB_SHPMT_CNTR_CRTN_TBL = "landing_sap_ib_shpmtcntnrcrtn_item_t"
+
+SRC_IB_SHPMTSTG_OBJ = "ib_shpmtstg_tbl"
+LAND_IB_SHPMTSTG_TBL = "landing_sap_ib_shpmtstg_t"
+
+# ILM Contants
+SRC_SO_ITMEXT_OBJ = "SO_ITMEXT_T"
+LAND_SO_ITMEXT_TBL = "landing_ilm_so_itmext_t"
+
+# ARTA Stage Constants
+STG_ARTA_DELIVERY_SIZE_TBL = "stage_arta_inbound_delivery_size_t"
+STAGE_ARTA_SALES_ORDER_ITEM_TBL = "stage_arta_sales_order_item_t"
+
+# EMEA landing table
+EMEA_LAND_MDI_TX_LINE_MEASURE_TBL = "emea_landing_mdi_tx_line_measure_t"
+EMEA_LAND_MDI_PACK_EVENT_TBL = "emea_landing_mdi_pack_event_t"
+EMEA_LAND_MDI_TX_EVENT_TBL = "emea_landing_mdi_tx_event_t"
+EMEA_LAND_MDI_TX_LINE_EVENT_TBL = "emea_landing_mdi_tx_line_event_t"
+
+EMEA_LAND_MDI_TX_LINE_REFERENCE_TBL = "emea_landing_mdi_tx_line_reference_t"
+EMEA_LAND_MDI_TX_LINE_PTNR_TBL = "emea_landing_mdi_tx_line_ptnr_t"
+EMEA_LAND_MDI_NOTE_TBL = "emea_landing_mdi_note_t"
+EMEA_LAND_MDI_TX_MEASURE_TBL = "emea_landing_mdi_tx_measure_t"
+EMEA_LAND_MDI_TX_REFERENCE_TBL = "emea_landing_mdi_tx_reference_t"
+EMEA_LAND_MDI_TX_PTNR_TBL = "emea_landing_mdi_tx_ptnr_t"
+EMEA_LAND_MDI_PACK_MEASURE_TBL = "emea_landing_mdi_pack_measure_t"
+EMEA_LAND_MDI_TX_LINE_DATE_TBL = "emea_landing_mdi_tx_line_date_t"
+EMEA_LAND_MDI_TX_LOCATION_TBL = "emea_landing_mdi_tx_location_t"
+
+# EMEA pre stage table
+PRE_STAGE_ARTA_PURCHASE_ORDER_ITEM_MEASURE_TBL = "pre_stage_arta_purchase_order_item_measure_t"
+PRE_STAGE_ARTA_VENDOR_BOOKING_ITEM_MEASURE_TBL = "pre_stage_arta_vendor_booking_item_measure_t"
+PRE_STAGE_ARTA_PURCHASE_ORDER_ITEM_EVENTS_TBL = "pre_stage_arta_purchase_order_item_events_t"
+PRE_STAGE_ARTA_PURCHASE_ORDER_HEADER_REFERENCE_TBL = "pre_stage_arta_purchase_order_header_reference_t"
+PRE_STAGE_ARTA_PURCHASE_ORDER_ITEM_REFERENCE_TBL = "pre_stage_arta_purchase_order_item_reference_t"
+PRE_STAGE_ARTA_PURCHASE_ORDER_ITEM_PARTNER_TBL = "pre_stage_arta_purchase_order_item_partner_t"
+PRE_STAGE_ARTA_PURCHASE_ORDER_ITEM_NOTE_TBL = "pre_stage_arta_purchase_order_item_note_t"
+
+PRE_STAGE_ARTA_SHIPMENT_NOTE_TBL = "pre_stage_arta_shipment_note_t"
+PRE_STAGE_ARTA_SHIPMENT_MEASURE_TBL = "pre_stage_arta_shipment_measure_t"
+PRE_STAGE_ARTA_SHIPMENT_REFERENCE_TBL = "pre_stage_arta_shipment_reference_t"
+PRE_STAGE_ARTA_SHIPMENT_PARTNER_TBL = "pre_stage_arta_shipment_partner_t"
+PRE_STAGE_ARTA_SHIPMENT_CONTAINER_MEASURE_TBL = "pre_stage_arta_shipment_container_measure_t"
+PRE_STAGE_ARTA_SHIPMENT_CONTAINER_EVENTS_TBL = "pre_stage_arta_shipment_container_events_t"
+PRE_STAGE_ARTA_SHIPMENT_HEADER_EVENTS_TBL = "pre_stage_arta_shipment_header_events_t"
+PRE_STAGE_ARTA_SHIPMENT_ITEM_EVENTS_TBL = "pre_stage_arta_shipment_item_events_t"
+PRE_STAGE_ARTA_SHIPMENT_LOCATION_TBL = "pre_stage_arta_shipment_location_t"
+
+PRE_STAGE_ARTA_SALES_ORDER_ITEM_MEASURE_TBL = "pre_stage_arta_sales_order_item_measure_t"
+PRE_STAGE_ARTA_SALES_ORDER_ITEM_DATE_TBL = "pre_stage_arta_sales_order_item_date_t"
+PRE_STAGE_ARTA_SALES_ORDER_ITEM_REFERENCE_TBL = "pre_stage_arta_sales_order_item_reference_t"
+
+PRE_STAGE_ARTA_SHIPMENT_ITEM_MEASURE_TBL = "pre_stage_arta_shipment_item_measure_t"
+PRE_STAGE_ARTA_SHIPMENT_ITEM_REFERENCE_TBL = "pre_stage_arta_shipment_item_reference_t"
+
+# Purchase Order Stage Tables
+STAGE_ARTA_PURCHASE_ORDER_ITEM_EVENTS_TBL = "stage_arta_purchase_order_item_events_t"
+STAGE_ARTA_PURCHASE_ORDER_ITEM_TBL = "stage_arta_purchase_order_item_t"
+
+# Fulfillment/Delivery Stage Tables
+STAGE_ARTA_DELIVERY_ITEM_TBL = "stage_arta_delivery_item_t"
+
+# Shipment Stage Tables
+STAGE_ARTA_SHIPMENT_HEADER_TBL = "stage_arta_shipment_header_t"
+STAGE_ARTA_SHIPMENT_HEADER_EVENTS_TBL = "stage_arta_shipment_header_events_t"
+STAGE_ILM_SHIPMENT_HEADER_ADDRESS_TBL = "stage_arta_shipment_header_address_t"
+STAGE_ILM_SHIPMENT_CARTON_ITEM_TBL = "stage_ilm_shipment_carton_item_t"
+STAGE_ILM_SHIPMENT_ITEM_TBL = "stage_ilm_shipment_item_t"
+
+TASK_BASE.PY
+
+import json
+import logging
+import os
+import re
+import tempfile
+import uuid
+from typing import Optional
+
+import yaml
+from brickflow import BrickflowEnvVars
+from brickflow.context import ctx as brickflow_ctx
+from koheesio.context import Context
+from koheesio.logger import LoggingFactory
+
+from spark.python.src.core.utils import SPARK_PYTHON_PROJECT_ROOT
+
+log = logging.getLogger(__name__)
+
+
+class TasksBase:
+    _instance = None
+    _ctx: Context
+
+    def __new__(cls, config: Optional[dict] = None) -> object:
+        if not isinstance(cls._instance, cls):
+            if config is None:
+                config = {"init": True}
+            cls._instance = object.__new__(cls)
+            cls.set_ctx(config)
+        elif config is not None and config != cls.ctx().to_dict():
+            cls.set_ctx(config)
+
+        return cls._instance
+
+    @staticmethod
+    def log(name, loglevel: Optional[int] = None):
+        if loglevel is None:
+            jp_log_level_str = brickflow_ctx.get_parameter("jp_log_level", "INFO")
+            loglevel = getattr(logging, jp_log_level_str.upper(), logging.INFO)
+
+        env = getattr(brickflow_ctx, "env", "local")
+
+        brickflow_ctx.log.propagate = True
+
+        LoggingFactory(name="app", level=loglevel, env=env)
+
+        logger = LoggingFactory.get_logger(name, inherit_from_koheesio=True)
+        logger.setLevel(loglevel)
+        logger.propagate = True
+
+        return logger
+
+    @classmethod
+    def ctx(cls) -> Context:
+        if isinstance(cls._instance, cls):
+            return cls._ctx
+
+        return Context({})
+
+    @classmethod
+    def set_ctx(cls, config: dict) -> None:
+        if isinstance(cls._instance, cls) and config is not None:
+            ctx_from_config: Context = Context.from_dict(config)
+            project_params = str(
+                brickflow_ctx.get_parameter(BrickflowEnvVars.BRICKFLOW_PROJECT_PARAMS.value.lower())
+                or os.environ.get(BrickflowEnvVars.BRICKFLOW_PROJECT_PARAMS.value)
+            )
+            try:
+                pairs = project_params.split(",")
+                kv_dict = {pair.split("=")[0]: pair.split("=")[1] for pair in pairs}
+                env_config = kv_dict.get("environment-config")
+                ephemeral_schema_name = kv_dict.get("ephemeral_schema_name")
+            except (KeyError, IndexError):
+                env_config = ctx_from_config.get("env", "local")
+                ephemeral_schema_name = None
+                log.debug("No environment-config or ephemeral_schema_name found in project_params")
+
+            cls._ctx = ctx_from_config.merge(
+                cls._get_sparkpython_context(env_config, ephemeral_schema_name), recursive=True
+            )
+
+    @staticmethod
+    def _get_sparkpython_context(env_config: str, ephemeral_schema_name: str = None) -> Context:
+        log.debug(f"Getting sparkpython context for {env_config}")
+        env_config_path = SPARK_PYTHON_PROJECT_ROOT.joinpath("config").joinpath(f"{env_config}.yaml")
+
+        if not env_config_path.exists():
+            raise FileNotFoundError(f"Environment config file not found: {env_config_path}")
+
+        if ephemeral_schema_name is not None:
+            env_yaml_path = TasksBase._create_ephemeral_yaml(env_config_path, env_config, ephemeral_schema_name)
+        else:
+            env_yaml_path = str(env_config_path)
+
+        return Context.merge(
+            Context.from_yaml(str(SPARK_PYTHON_PROJECT_ROOT.joinpath("config").joinpath("common.yaml"))),
+            Context.from_yaml(env_yaml_path),
+            recursive=True,
+        )
+
+    @staticmethod
+    def _create_ephemeral_yaml(env_config_path, env_config: str, ephemeral_schema_name: str) -> str:
+        """Create a modified YAML file with ephemeral schema names and return the path."""
+        with open(env_config_path, "r", encoding="utf-8") as file:
+            env_config_content = yaml.safe_load(file)
+
+        log.debug(f"Modifying YAML with ephemeral_schema_name: {ephemeral_schema_name}")
+
+        json_str = json.dumps(env_config_content)
+        modified_json_str = re.sub(r"\{\{\s*ephemeral_schema_name\s*\}\}", ephemeral_schema_name, json_str)
+        modified_config_content = json.loads(modified_json_str)
+
+        temp_dir = tempfile.gettempdir()
+        tmp_yaml_path = f"{temp_dir}/{env_config}_{uuid.uuid4().hex[:8]}.yaml"
+        with open(tmp_yaml_path, "w", encoding="utf-8") as file:
+            yaml.dump(modified_config_content, file)
+
+        log.debug(f"Modified YAML written to: {tmp_yaml_path}")
+        return tmp_yaml_path
+
+UTILS.PY
+
+import json
+import logging
+import os
+import time
+from pathlib import Path
+
+from delta import configure_spark_with_delta_pip
+from pyspark.sql import SparkSession
+
+SPARK_PYTHON_PROJECT_ROOT = Path([i for i in Path(__file__).parents if i.as_uri().endswith("src")][0]).parent
+
+LOCAL_SPARK_WAREHOUSE_PATH = SPARK_PYTHON_PROJECT_ROOT.joinpath(".local").joinpath("spark-warehouse")
+LOCAL_CHECKPOINT_PATH = SPARK_PYTHON_PROJECT_ROOT.joinpath(".local").joinpath("checkpoint")
+
+
+def read_json(file_path: str):
+    with open(file_path, encoding="utf-8") as file:
+        return json.load(file)
+
+
+def get_local_spark_session() -> SparkSession:
+    # Change Python timezone to UTC
+    os.environ["TZ"] = "UTC"
+    time.tzset()
+
+    # Set logging level to ERROR for py4j
+    logging.getLogger("py4j").setLevel(logging.ERROR)
+
+    builder = (
+        SparkSession.builder.appName("local_app")
+        .master("local[*]")
+        .config("spark.sql.session.timeZone", "UTC")
+        .config("spark.sql.warehouse.dir", str(LOCAL_SPARK_WAREHOUSE_PATH))
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+        .config(
+            "spark.sql.catalog.spark_catalog",
+            "org.apache.spark.sql.delta.catalog.DeltaCatalog",
+        )
+    )
+
+    return configure_spark_with_delta_pip(
+        builder,
+        # NOTE epic-dunk: The Scala 2.13 version of spark-avro for Spark 3.5.x has a bug, hence we're hard-coding Scala '2_12', even when using dbr16.4.x-scala2.13'
+        # fmt: off
+        extra_packages=["org.apache.spark:spark-avro_2.12:3.5.3"],
+    ).getOrCreate()
+
+SCHEMA ->AR_RAW_SCHEMA
+
+from pyspark.sql.types import (StructType, StructField, StringType,DateType,DecimalType, TimestampType)
+
+mdi_pack_schema = StructType([
+    StructField("ORG_CODE", StringType(), False),
+    StructField("PACK_ID", StringType(), False),
+    StructField("PACK_SEQ_NUM", StringType(), True),
+    StructField("COMPANY_CODE", StringType(), False),
+    StructField("ALT_KEY_PACK", StringType(), False),
+    StructField("PARENT_PACK_KEY", StringType(), True),
+    StructField("PACK_TYPE_STD_CODE", StringType(), True),
+    StructField("PACK_CATEGORY", StringType(), True),
+    StructField("PACK_TYPE", StringType(), True),
+    StructField("PACK_SUB_TYPE", StringType(), True),
+    StructField("PRO_NUM", StringType(), True),
+    StructField("SEAL_NUM", StringType(), True),
+    StructField("LENGTH", StringType(), True),
+    StructField("WIDTH", StringType(), True),
+    StructField("HEIGHT", StringType(), True),
+    StructField("DIMENSION_UOM", StringType(), True),
+    StructField("TOTAL_QUANTITY", StringType(), True),
+    StructField("QUANTITY_UOM", StringType(), True),
+    StructField("GROSS_WEIGHT", StringType(), True),
+    StructField("NET_WEIGHT", StringType(), True),
+    StructField("WEIGHT_UOM", StringType(), True),
+    StructField("VOLUME", StringType(), True),
+    StructField("GROSS_VOLUME", StringType(), True),
+    StructField("VOLUME_UOM", StringType(), True),
+    StructField("EX_STATUS", StringType(), True),
+    StructField("IM_STATUS", StringType(), True),
+    StructField("LOG_STATUS", StringType(), True),
+    StructField("RESULT_ID", StringType(), True),
+    StructField("IN_TRANSIT_TYPE", StringType(), True),
+    StructField("SOURCE_PACK_ID", StringType(), True),
+    StructField("SOURCE_PARENT_PACK_ID", StringType(), True),
+    StructField("BATCH_ID", StringType(), True),
+    StructField("CURRENT_EVENT_KEY", StringType(), True),
+    StructField("ARRIVE_EVENT_KEY", StringType(), True),
+    StructField("DEPART_EVENT_KEY", StringType(), True),
+    StructField("ROOT_PACK_KEY", StringType(), True),
+    StructField("IS_COPY", StringType(), True),
+    StructField("CONTAINER_OWNED_BY", StringType(), True),
+    StructField("SOURCE_OF_DATA", StringType(), True),
+    StructField("CREATED_BY", StringType(), True),
+    StructField("CREATED_DATE", StringType(), True),
+    StructField("LAST_MODIFIED_BY", StringType(), True),
+    StructField("LAST_MODIFIED_DATE", StringType(), True),
+    StructField("IS_HAZARDOUS", StringType(), True),
+    StructField("WEIGHING_PTNR_KEY", StringType(), True),
+    StructField("WEIGHING_LOCATION_NAME", StringType(), True),
+    StructField("IS_DETENTION_DEST_INPROGRESS", StringType(), True),
+    StructField("DEMURRAGE_DEST_RULE_KEY", StringType(), True),
+    StructField("DEMURRAGE_ORIG_RULE_KEY", StringType(), True),
+    StructField("DETENTION_DEST_RULE_KEY", StringType(), True),
+    StructField("VERIFIED_GROSS_WEIGHT_UOM", StringType(), True),
+    StructField("VERIFIED_GROSS_WEIGHT", StringType(), True),
+    StructField("IS_DEMURRAGE_DEST_INPROGRESS", StringType(), True),
+    StructField("WEIGHING_LOCATION_CODE", StringType(), True),
+    StructField("LEG_INDICATOR", StringType(), True),
+    StructField("WEIGHING_LOCATION_STD_CODE", StringType(), True),
+    StructField("DETENTION_ORIG_RULE_KEY", StringType(), True),
+    StructField("IS_DEMURRAGE_ORIG_INPROGRESS", StringType(), True),
+    StructField("WEIGHING_METHOD", StringType(), True),
+    StructField("WEIGHING_LOCATION_QUALIFIER", StringType(), True),
+    StructField("IS_DETENTION_ORIG_INPROGRESS", StringType(), True),
+    StructField("TX_KEY", StringType(), True),
+    StructField("CHASSIS_DEST_RULE_KEY", StringType(), True),
+    StructField("CHASSIS_ORIG_RULE_KEY", StringType(), True),
+    StructField("IS_CHASSIS_DEST_INPROGRESS", StringType(), True),
+    StructField("IS_CHASSIS_ORIG_INPROGRESS", StringType(), True),
+    StructField("OPERATION_TYPE", StringType(), True),
+    StructField("COMMIT_TIMESTAMP", StringType(), True)
+    # StructField("record_created_dt", StringType(), True),
+    # StructField("record_created_tmst", StringType(), True),
+    # StructField("source_file", StringType(), True),
+    # StructField("source_file_name", StringType(), True)
+])
+
+TASK (CODE)
+LANDING
+
+AUTOLOADER
+
+"""
+Simple AutoLoader for Databricks with Config Support
+Based on the exact AutoLoaderIngestion class with parameterized config approach
+
+Author: ILM Analytics Team  
+Version: 1.0
+
+"""
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, current_timestamp, current_date, regexp_replace, regexp_extract
+from pyspark.sql.types import TimestampType, StringType
+import re
+import os
+import json
+import sys
+import argparse
+import logging
+import time
+from datetime import datetime, timezone
+
+
+# Configure logger for production monitoring
+logger = logging.getLogger("ILM AutoLoader Ingestion")
+logger.setLevel(logging.INFO)
+logger.addHandler(logging.StreamHandler())
+
+def fn_print_time(logger_string):
+    """Log message with UTC timestamp for critical milestones"""
+    ts = time.time()
+    ts = datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+    return logger.info("{} : {}".format(logger_string, ts))
+
+# Get current path
+current_path = os.getcwd()
+print(f"Current working directory: {current_path}")
+
+
+class AutoLoaderIngestion:
+    def __init__(self, spark: SparkSession, file_path: str, table_name: str, checkpoint_path: str, 
+                 delimiter: str = "\u0001", file_format: str = "csv", raw_schema=None, first_col: str = None, last_col: str = None):
+        """
+        Initialize AutoLoader ingestion instance
+        
+        :param spark: SparkSession object
+        :param file_path: S3 path where the files are stored
+        :param table_name: Delta table where data will be written
+        :param checkpoint_path: Path for maintaining checkpoint state
+        :param delimiter: Delimiter for CSV files (default: ASCII \u0001)
+        :param file_format: File format (csv, json, etc)
+        :param raw_schema: Optional predefined schema. If None, schema will be inferred automatically
+        :param first_col: Optional name of the first column to clean
+        :param last_col: Optional name of the last column to clean
+        """
+        self.spark = spark
+        self.file_path = file_path
+        self.table_name = table_name
+        self.checkpoint_path = checkpoint_path
+        self.delimiter = delimiter
+        self.file_format = file_format
+        self.raw_schema = raw_schema
+        self.first_col = first_col
+        self.last_col = last_col
+        if self.raw_schema:
+            self.first_col = raw_schema.fields[0].name
+            self.last_col = raw_schema.fields[-1].name
+        
+    
+    def clean_column_names(self, df):
+        """
+        Clean column names to remove invalid characters for Delta Lake compatibility
+        Replaces special characters with underscores and ensures valid column naming conventions
+        """
+        old_columns = df.columns
+        column_name_map = {}
+        
+        for i, col_name in enumerate(old_columns):
+            # Replace special characters (spaces, commas, semicolons, etc.) with underscores
+            clean_name = re.sub(r'[ ,;{}()\n\t=:"]', '_', str(col_name))
+            # Remove consecutive underscores and trim leading/trailing underscores
+            clean_name = re.sub(r'_+', '_', clean_name).strip('_')
+            
+            # Ensure column name doesn't start with a digit
+            if not clean_name or clean_name[0].isdigit():
+                clean_name = f"col_{i}"
+            
+            column_name_map[col_name] = clean_name
+        
+        # Apply column renaming transformations
+        for old_col, new_col in column_name_map.items():
+            if old_col != new_col:
+                df = df.withColumnRenamed(old_col, new_col)
+        
+        return df
+
+    def setup_delta_table_with_column_mapping(self):
+        """
+        Setup Delta table with column mapping enabled for special character support
+        Creates table if it doesn't exist, otherwise validates existing table structure
+        """
+        try:
+            # Check if table already exists
+            describe_df = self.spark.sql(f"DESCRIBE TABLE {self.table_name}")
+            logger.info(f"Table {self.table_name} already exists")
+            describe_df.show(truncate=False)
+        except:
+            logger.info(f"Creating table {self.table_name} with column mapping enabled")
+            
+            if self.raw_schema:
+                # Create table using predefined schema structure
+                print("Using predefined schema for table creation")
+                columns_ddl = self._convert_schema_to_ddl(self.raw_schema)
+                # Define metadata columns that will be added during ingestion
+                metadata_columns = """source_file STRING,
+                    source_file_name STRING,
+                    record_created_dt STRING,
+                    record_created_tmst STRING"""
+                
+                self.spark.sql(f"""
+                CREATE TABLE IF NOT EXISTS {self.table_name} (
+                    {columns_ddl},
+                    {metadata_columns}
+                ) USING DELTA
+                TBLPROPERTIES (
+                    'delta.columnMapping.mode' = 'name'
+                )
+                """)
+                self.spark.sql(f"ALTER TABLE {self.table_name} OWNER TO `App.NikeSole.ilm.Developer`")
+                fn_print_time(f"Table {self.table_name} created with predefined schema")
+            else:
+                # Create table with placeholder column for schema inference
+                print("Using placeholder for schema inference")
+                self.spark.sql(f"""
+                CREATE TABLE IF NOT EXISTS {self.table_name} (
+                    _placeholder STRING
+                ) USING DELTA
+                TBLPROPERTIES (
+                    'delta.columnMapping.mode' = 'name'
+                )
+                """)
+                fn_print_time(f"Table {self.table_name} created for schema inference")
+    
+    def _convert_schema_to_ddl(self, schema):
+        """
+        Convert StructType schema to DDL format for CREATE TABLE statement
+        Handles field name, data type, and nullable constraints
+        """
+        ddl_parts = []
+        
+        for field in schema.fields:
+            field_name = field.name
+            field_type = self._spark_type_to_sql(field.dataType)
+            # Delta/Spark SQL: only specify NOT NULL for non-nullable fields
+            nullable_clause = "" if field.nullable else " NOT NULL"
+            ddl_parts.append(f"{field_name} {field_type}{nullable_clause}")
+        
+        return ",\n                    ".join(ddl_parts)
+
+    def _spark_type_to_sql(self, spark_type):
+        """
+        Convert Spark DataType to SQL DDL type string
+        Maps PySpark types to their SQL equivalents for table creation
+        """
+        from pyspark.sql.types import StringType, IntegerType, LongType, DoubleType, BooleanType, DecimalType, TimestampType, DateType
+        
+        if isinstance(spark_type, StringType):
+            return "STRING"
+        elif isinstance(spark_type, IntegerType):
+            return "INT"
+        elif isinstance(spark_type, LongType):
+            return "BIGINT"
+        elif isinstance(spark_type, DoubleType):
+            return "DOUBLE"
+        elif isinstance(spark_type, BooleanType):
+            return "BOOLEAN"
+        elif isinstance(spark_type, DecimalType):
+            return f"DECIMAL({spark_type.precision},{spark_type.scale})"
+        elif isinstance(spark_type, TimestampType):
+            return "TIMESTAMP"
+        elif isinstance(spark_type, DateType):
+            return "DATE"
+        else:
+            # Default to STRING for complex or unknown types
+            return "STRING"
+    
+    
+    def start_ingestion(self):
+        """
+        Start the Auto Loader stream to ingest data with schema agnostic support
+        Configures streaming reader, applies transformations, and writes to Delta table
+        """
+        fn_print_time(f"Auto Loader started for table: {self.table_name.lower()}")
+        
+        # Setup Delta table with column mapping
+        self.setup_delta_table_with_column_mapping()
+        
+        # Configure Spark for optimized performance
+        self.spark.conf.set("spark.databricks.queryWatchdog.maxQueryTasks", 200000)
+        self.spark.conf.set("spark.sql.shuffle.partitions", "200")
+        self.spark.conf.set("spark.databricks.io.cache.enabled", "true")
+        self.spark.conf.set("spark.databricks.queryWatchdog.outputRatioThreshold", "1000")
+        
+        # Build streaming reader with cloud files format (Auto Loader)
+        stream_reader = (self.spark.readStream
+                        .format("cloudFiles")
+                        .option("cloudFiles.format", self.file_format)
+                        .option("cloudFiles.schemaLocation", self.checkpoint_path + "/schema")
+                        .option("cloudFiles.maxFilesPerTrigger", "200000")
+                        .option("mode", "PERMISSIVE")
+                        .option("columnNameOfCorruptRecord", "_corrupt_record")
+                        .option("modifiedAfter", "2026-03-22T00:00:00Z")) 
+        # Configure format-specific options
+        if self.file_format == "csv":
+            logger.info(f"Configuring CSV format with delimiter: {repr(self.delimiter)}")
+            stream_reader = (stream_reader
+                           .option("delimiter", self.delimiter)
+                           .option("header", "false"))
+        elif self.file_format == "json":
+            logger.info("Configuring JSON format with multiline support")
+            stream_reader = stream_reader.option("multiLine", "true")
+        
+        # Configure schema handling (inference or predefined)
+        if self.raw_schema is None:
+            print("Using schema agnostic mode with automatic inference")
+            stream_reader = (stream_reader
+                           .option("cloudFiles.inferColumnTypes", "true")
+                           .option("cloudFiles.schemaEvolutionMode", "addNewColumns"))
+        else:
+            print(f"Using predefined schema with {len(self.raw_schema.fields)} fields")
+            stream_reader = stream_reader.schema(self.raw_schema)
+        
+        # Load data from source path
+        df = stream_reader.load(self.file_path)
+        logger.info(f"Loaded data from source: {self.file_path}")
+        
+        # Clean column names for Delta compatibility
+        df = self.clean_column_names(df)
+        
+        # Apply CSV data cleaning to first and last columns if specified
+        if self.first_col and self.last_col:
+            print(f"Applying CSV data cleaning for columns: {self.first_col}, {self.last_col}")
+            df = (df.withColumn(self.first_col, regexp_replace(col(self.first_col), r'^\[*\{\"csv_data\"\s*:\s*\"', ''))
+                   .withColumn(self.last_col, regexp_replace(col(self.last_col), r'\"\},*\]*$', '')))
+        
+        # Normalize special characters in all string columns
+        string_columns = [field.name for field in df.schema.fields if isinstance(field.dataType, StringType)]
+        for col_name in string_columns:
+            logger.info(f"Normalizing special characters in column: {col_name}")
+            df = df.withColumn(
+                col_name,
+                regexp_replace(col(col_name), r'\\"', '"')  # Replace \" with "
+            ).withColumn(
+                col_name,
+                regexp_replace(col(col_name), r'\\', '')  # Remove backslashes
+            )
+        # Add metadata columns (check for existing columns to avoid conflicts)
+        df_columns = df.columns
+        df = df.select("*")
+        
+        # Add source file path from metadata
+        if "source_file" not in df_columns:
+            df = df.withColumn("source_file", col("_metadata.file_path"))
+        else:
+            logger.warning("Column 'source_file' already exists in source data, skipping metadata addition")
+        
+        # Add source file name from metadata path
+        # if "source_file_name" not in df_columns:
+        #     df = df.withColumn("source_file_name", regexp_extract(col("_metadata.file_path"), r'([^/]+)$', 1))
+        # else:
+        #     logger.warning("Column 'source_file_name' already exists in source data, skipping metadata addition")
+        
+        # Add record created date
+        if "record_created_dt" not in df_columns:
+            df = df.withColumn("record_created_dt", current_date().cast("string"))
+        else:
+            logger.warning("Column 'record_created_dt' already exists in source data, skipping metadata addition")
+        
+        # Add record created timestamp
+        if "record_created_tmst" not in df_columns:
+            df = df.withColumn("record_created_tmst", current_timestamp().cast("string"))
+        else:
+            logger.warning("Column 'record_created_tmst' already exists in source data, skipping metadata addition")
+        
+        # Cast commit_timestamp to proper type if it exists
+        if "commit_timestamp" in df.columns:
+            df = df.withColumn("commit_timestamp", col("commit_timestamp").cast(TimestampType()))
+
+        # Write stream to Delta table with schema evolution
+        logger.info("Starting streaming write to Delta table")
+        query = (df.writeStream
+                .option("checkpointLocation", self.checkpoint_path + "/checkpoint")
+                .option("mergeSchema", "true")  # Enable schema evolution
+                .outputMode("append")
+                .trigger(availableNow=True)
+                .toTable(self.table_name))
+        
+        # Wait for stream completion (30 second timeout)
+        query.awaitTermination(30000)
+        fn_print_time(f"Auto Loader completed successfully for table: {self.table_name.lower()}")
+
+def ingestion_main(config: dict):
+    """
+    Main function to run AutoLoader for a specific table using configuration
+    Initializes Spark session, creates AutoLoader instance, and starts ingestion
+    
+    :param config: Configuration dictionary containing all required parameters
+    :return: True if ingestion completes successfully
+    """
+    print("ingestion_main is running")
+    
+    # Initialize Spark session with Delta Lake configurations
+    spark = SparkSession.builder \
+        .appName("AutoLoaderIngestion") \
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
+        .getOrCreate()
+    
+    logger.info(f"Starting ingestion for table: {config['table_name']}")
+    logger.info(f"Source path: {config['source_path']}")
+    
+    # Extract file format and set appropriate delimiter
+    file_format = config.get("file_format", "csv")
+    
+    if file_format == "csv":
+        delimiter = config.get("delimiter", "\u0001")  # Default ASCII delimiter
+    else:
+        delimiter = config.get("delimiter", None)  # No delimiter for non-CSV formats
+    
+    # Create AutoLoader instance with configuration
+    ingestion = AutoLoaderIngestion(
+        spark=spark,
+        file_path=config["source_path"],
+        table_name=config["table_name"],
+        checkpoint_path=config["checkpoint_path"],
+        delimiter=delimiter,
+        file_format=file_format,
+        raw_schema=config.get("raw_schema", None),
+        first_col=config.get("first_col", None),
+        last_col=config.get("last_col", None)
+    )
+    print("ingestion is about to start")
+    # Execute ingestion process
+    ingestion.start_ingestion()
+    
+    fn_print_time(f"Successfully completed ingestion for {config['table_name']}")
+    return True
+
+def find_and_load_schema(schema_name):
+    import importlib.util
+    from pathlib import Path
+
+    schema_file = Path(__file__).resolve().parents[2] / "schema" / "ar_raw_schema.py"
+    logger.info(f"Loading schema '{schema_name}' from: {schema_file}")
+
+    spec = importlib.util.spec_from_file_location("ar_raw_schema", str(schema_file))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    schema_obj = getattr(module, schema_name)
+    logger.info(f"Loaded schema '{schema_name}' with {len(schema_obj.fields)} fields")
+    return schema_obj
+
+
+if __name__ == "__main__":
+    
+    fn_print_time("Starting AutoLoader script")
+    
+    # Parse command line arguments for script execution
+    parser = argparse.ArgumentParser(description='AutoLoader Ingestion for ILM Bronze Layer')
+    parser.add_argument('--file_path', required=True, help='Source file path (S3)')
+    parser.add_argument('--table_name', required=True, help='Target Delta table name')
+    parser.add_argument('--checkpoint_path', required=True, help='Checkpoint location path')
+    parser.add_argument('--delimiter', required=True, help='File delimiter character')
+    parser.add_argument('--file_format', required=True, help='File format (csv/json)')
+    parser.add_argument("--raw_schema", help="Name of the raw schema to load", default=None)
+    
+    args = parser.parse_args()
+    
+    logger.info(f"Parsed arguments - Table: {args.table_name}, Format: {args.file_format}")
+
+    print("#################################################################")
+    print("########################## auto loader is running ##################################")
+    print("############################################################")
+    
+    # Load schema if specified
+    raw_schema = find_and_load_schema(args.raw_schema)
+
+    # Add Databricks workspace paths for imports
+    sys.path.insert(0, "/Workspace/Repos")
+    sys.path.insert(0, os.getcwd())
+    
+    # Build configuration dictionary from command line arguments
+    config = {
+        "source_path": args.file_path,
+        "table_name": args.table_name,
+        "checkpoint_path": args.checkpoint_path,
+        "delimiter": args.delimiter,
+        "file_format": args.file_format,
+        "raw_schema": raw_schema
+    }
+    
+    logger.info("Configuration built successfully")
+    logger.info(f"Schema status: {'Loaded' if raw_schema else 'Will use inference'}")
+    
+    # Execute ingestion
+    ingestion_main(config)
+        
+
+ARTA_BRONZE_S3_TO_DBX.PY
+
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import yaml
+# from emea_inbound.input_model.delta_clone import DedupCondition, SortOrder, UnityCatalogCloneModel
+# from emea_inbound.task.snowflake_uc_clone_task import SnowflakeDeltaTableCloneUC
+# from emea_inbound.utils.base import NoDataException
+from brickflow.context import ctx
+from pyspark.sql import SparkSession
+import os
+import spark.python.src.tasks.landing.autoloader as autoloader
+import spark.python.src.tasks.landing.arta_bronze_merge as arta_bronze_merge
+from spark.python.src.core.constants import (
+    SRC_MDI_NOTE_OBJ,
+    SRC_MDI_PACK_EVENT_OBJ,
+    SRC_MDI_PACK_MEASURE_OBJ,
+    SRC_MDI_PACK_OBJ,
+    SRC_MDI_TX_EVENT_OBJ,
+    SRC_MDI_TX_LINE_DATE_OBJ,
+    SRC_MDI_TX_LINE_DE_OBJ,
+    SRC_MDI_TX_LINE_EVENT_OBJ,
+    SRC_MDI_TX_LINE_MEASURE_OBJ,
+    SRC_MDI_TX_LINE_OBJ,
+    SRC_MDI_TX_LINE_PTNR_OBJ,
+    SRC_MDI_TX_LINE_REFERENCE_OBJ,
+    SRC_MDI_TX_LOCATION_OBJ,
+    SRC_MDI_TX_MATRIX_OBJ,
+    SRC_MDI_TX_MEASURE_OBJ,
+    SRC_MDI_TX_OBJ,
+    SRC_MDI_TX_PACKREF_OBJ,
+    SRC_MDI_TX_PTNR_OBJ,
+    SRC_MDI_TX_REFERENCE_OBJ,
+    SRC_MDI_PTNR_OBJ # need to confirm on this as emea are not using this table
+)
+
+env = ctx.env
+print(f"Current environment: {env}")
+
+def _load_landing_config_for_env(current_env: str) -> Dict[str, Any]:
+    if str(current_env).lower() == "prod":
+        env_key = "prod" 
+    elif str(current_env).lower() == "qa" :
+        env_key = "qa"
+    else:
+        env_key = "dev"
+    
+    config_path = Path(__file__).resolve().parents[3] / "config" / f"{env_key}.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Environment config file not found: {config_path}")
+
+    config_data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    landing_config = config_data.get("landing", {})
+    if not landing_config:
+        raise KeyError(f"Missing 'landing' section in {config_path}")
+    return landing_config
+
+
+landing_config = _load_landing_config_for_env(env)
+catalog = landing_config["catalog"]
+schema = landing_config["schema"]
+
+
+_source_catalog_path = "source.sf.ARTA"
+_target_catalog_path = "landing"
+_src_delta_expression = "coalesce(SRCUPDTTMST,SRCCRTTMST,LAST_MODIFIED_DATE)"
+_cdc_column = "coalesce(SRCUPDTTMST,SRCCRTTMST,LAST_MODIFIED_DATE)"  # "LAST_MODIFIED_DATE"
+_no_data_exception = "No data to load"
+
+_AUTOLOADER_CONFIG: Optional[Dict[str, Any]] = None
+
+
+def _load_autoloader_config() -> Dict[str, Any]:
+    global _AUTOLOADER_CONFIG
+    if _AUTOLOADER_CONFIG is None:
+        config_path = Path(__file__).resolve().parents[3] / "config" / "autoloader_config.yaml"
+        if not config_path.exists():
+            raise FileNotFoundError(f"Autoloader config not found at {config_path}")
+        _AUTOLOADER_CONFIG = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    return _AUTOLOADER_CONFIG
+
+
+def get_config(table_name: str) -> Dict[str, Any]:
+    """
+    Get configuration for a specific table from YAML config.
+    Applies defaults for delimiter and file_format if not specified.
+    """
+    autoloader_config = _load_autoloader_config()
+    tables = autoloader_config.get("tables", {})
+    defaults = autoloader_config.get("defaults", {})
+    
+    if table_name not in tables:
+        available_tables = ", ".join(tables.keys())
+        raise ValueError(f"Table '{table_name}' not found. Available tables: {available_tables}")
+    
+    table_config = tables[table_name].copy()
+    
+    # Apply defaults if not specified in table config
+    if "autoloader" not in table_config:
+        table_config["autoloader"] = defaults.get("autoloader")
+    if "bronze_merge" not in table_config:
+        table_config["bronze_merge"] = defaults.get("bronze_merge")
+    if "delimiter" not in table_config:
+        table_config["delimiter"] = defaults.get("delimiter", "\u0001")
+    if "file_format" not in table_config:
+        table_config["file_format"] = defaults.get("file_format", "csv")
+    
+    return table_config
+
+
+def _table_slug(table_name: str) -> str:
+    return table_name[:-2] if table_name.endswith("_t") else table_name
+
+def _get_table_config(table_name: str) -> Dict[str, Any]:
+    try:
+        return get_config(table_name)
+    except ValueError:
+        table_key = _table_slug(table_name)
+        if table_key == table_name:
+            raise
+        return get_config(table_key)
+
+
+def _delete_old_landing_data(table_name: str, retention_days: int = 7 ) -> None:
+    """Delete records older than *retention_days* based on record_created_tmst."""
+
+    spark = SparkSession.builder.getOrCreate()
+
+    delete_sql = (
+        f"DELETE FROM {table_name} "
+        f"WHERE CAST(record_created_tmst AS DATE) < current_date() - INTERVAL {retention_days} DAYS"
+    )
+    print(f"Deleting records older than {retention_days} days from {table_name}")
+    spark.sql(delete_sql)
+    print(f"Old records deleted successfully from {table_name}")
+
+
+def _load_landing_table_task(table_name: str) -> None:
+    """Run Auto Loader ingestion for the table."""
+    table_config = _get_table_config(table_name)
+    AUTOLOADER_PATH = table_config["autoloader"]
+    file_path = table_config["source_path"]
+    bare_table_name = table_config["table_name"]
+    target_table_name = f"{catalog}.{schema}.{bare_table_name}"
+    checkpoint_path = f"/Volumes/{catalog}/{schema}/{bare_table_name}"
+    delimiter = table_config["delimiter"]
+    file_format = table_config["file_format"]
+    table_schema_name = table_config["raw_schema"]
+    print("table_schema:", table_schema_name)
+
+    print("AUTOLOADER_PATH:", AUTOLOADER_PATH)
+    print("file_path:", file_path)
+    print("table_name:", target_table_name)
+    print("checkpoint_path:", checkpoint_path)
+    print("delimiter:", delimiter)
+    print("file_format:", file_format)
+    print("table_schema_name:", table_schema_name)
+    print("autoloader is eneabled now")
+
+    raw_schema = autoloader.find_and_load_schema(table_schema_name)
+    config = {
+        "source_path": file_path,
+        "table_name": target_table_name,
+        "checkpoint_path": checkpoint_path,
+        "delimiter": delimiter,
+        "file_format": file_format,
+        "raw_schema": raw_schema
+    }
+
+    autoloader.ingestion_main(config)
+
+    _delete_old_landing_data(target_table_name)
+
+
+def _merge_table_task(table_name: str) -> None:
+    table_slug = _table_slug(table_name)
+    sql_path = Path(__file__).resolve().parents[3] / "sql" / "cleansed" / f"merge_{table_slug}.sql"
+    print("sql_path:", sql_path)
+    print(os.getcwd())
+    sql_path.read_text(encoding="utf-8")  # Validate SQL file exists
+    merge_sql_template = f"merge_{table_slug}.sql"
+    print("Merge process started for table:", table_name)
+    table_config = _get_table_config(table_name)
+    bronze_merge_path = table_config["bronze_merge"]
+    print("sql_path:", sql_path)
+    print("merge_sql_template:", merge_sql_template)
+    print("catalog:", catalog)
+    print("schema:", schema)
+    print("table_name:", table_name)
+    print("bronze_merge_path:", bronze_merge_path)
+    print("merge is enabled ")
+    
+    sql_file=arta_bronze_merge.find_and_load_sql_template(merge_sql_template)
+    arta_bronze_merge.merge_main(catalog, schema, table_name, sql_file)
+
+
+def load_landing_mdi_tx_task() -> None:
+    _load_landing_table_task(SRC_MDI_TX_OBJ)
+
+
+def merge_table_mdi_tx_task() -> None:
+    _merge_table_task(SRC_MDI_TX_OBJ)
+
+
+def load_landing_mdi_tx_line_task() -> None:
+    _load_landing_table_task(SRC_MDI_TX_LINE_OBJ)
+
+
+def merge_table_mdi_tx_line_task() -> None:
+    _merge_table_task(SRC_MDI_TX_LINE_OBJ)
+
+
+def load_landing_mdi_tx_line_de_task() -> None:
+    _load_landing_table_task(SRC_MDI_TX_LINE_DE_OBJ)
+
+
+def merge_table_mdi_tx_line_de_task() -> None:
+    _merge_table_task(SRC_MDI_TX_LINE_DE_OBJ)
+
+
+def load_landing_mdi_tx_line_event_task() -> None:
+    _load_landing_table_task(SRC_MDI_TX_LINE_EVENT_OBJ)
+
+
+def merge_table_mdi_tx_line_event_task() -> None:
+    _merge_table_task(SRC_MDI_TX_LINE_EVENT_OBJ)
+
+
+def load_landing_mdi_tx_line_measure_task() -> None:
+    _load_landing_table_task(SRC_MDI_TX_LINE_MEASURE_OBJ)
+
+
+def merge_table_mdi_tx_line_measure_task() -> None:
+    _merge_table_task(SRC_MDI_TX_LINE_MEASURE_OBJ)
+
+
+def load_landing_mdi_tx_line_ptnr_task() -> None:
+    _load_landing_table_task(SRC_MDI_TX_LINE_PTNR_OBJ)
+
+
+def merge_table_mdi_tx_line_ptnr_task() -> None:
+    _merge_table_task(SRC_MDI_TX_LINE_PTNR_OBJ)
+
+
+def load_landing_mdi_tx_line_reference_task() -> None:
+    _load_landing_table_task(SRC_MDI_TX_LINE_REFERENCE_OBJ)
+
+
+def merge_table_mdi_tx_line_reference_task() -> None:
+    _merge_table_task(SRC_MDI_TX_LINE_REFERENCE_OBJ)
+
+
+def load_landing_mdi_tx_line_date_task() -> None:
+    _load_landing_table_task(SRC_MDI_TX_LINE_DATE_OBJ)
+
+
+def merge_table_mdi_tx_line_date_task() -> None:
+    _merge_table_task(SRC_MDI_TX_LINE_DATE_OBJ)
+
+
+def load_landing_mdi_tx_event_task() -> None:
+    _load_landing_table_task(SRC_MDI_TX_EVENT_OBJ)
+
+
+def merge_table_mdi_tx_event_task() -> None:
+    _merge_table_task(SRC_MDI_TX_EVENT_OBJ)
+
+
+def load_landing_mdi_tx_matrix_task() -> None:
+    _load_landing_table_task(SRC_MDI_TX_MATRIX_OBJ)
+
+
+def merge_table_mdi_tx_matrix_task() -> None:
+    _merge_table_task(SRC_MDI_TX_MATRIX_OBJ)
+
+
+def load_landing_mdi_tx_measure_task() -> None:
+    _load_landing_table_task(SRC_MDI_TX_MEASURE_OBJ)
+
+
+def merge_table_mdi_tx_measure_task() -> None:
+    _merge_table_task(SRC_MDI_TX_MEASURE_OBJ)
+
+
+def load_landing_mdi_tx_location_task() -> None:
+    _load_landing_table_task(SRC_MDI_TX_LOCATION_OBJ)
+
+
+def merge_table_mdi_tx_location_task() -> None:
+    _merge_table_task(SRC_MDI_TX_LOCATION_OBJ)
+
+
+def load_landing_mdi_tx_packref_task() -> None:
+    _load_landing_table_task(SRC_MDI_TX_PACKREF_OBJ)
+
+
+def merge_table_mdi_tx_packref_task() -> None:
+    _merge_table_task(SRC_MDI_TX_PACKREF_OBJ)
+
+
+def load_landing_mdi_tx_reference_task() -> None:
+    _load_landing_table_task(SRC_MDI_TX_REFERENCE_OBJ)
+
+
+def merge_table_mdi_tx_reference_task() -> None:
+    _merge_table_task(SRC_MDI_TX_REFERENCE_OBJ)
+
+
+def load_landing_mdi_tx_ptnr_task() -> None:
+    _load_landing_table_task(SRC_MDI_TX_PTNR_OBJ)
+
+
+def merge_table_mdi_tx_ptnr_task() -> None:
+    _merge_table_task(SRC_MDI_TX_PTNR_OBJ)
+
+
+def load_landing_mdi_pack_task() -> None:
+    _load_landing_table_task(SRC_MDI_PACK_OBJ)
+
+
+def merge_table_mdi_pack_task() -> None:
+    _merge_table_task(SRC_MDI_PACK_OBJ)
+
+
+def load_landing_mdi_pack_event_task() -> None:
+    _load_landing_table_task(SRC_MDI_PACK_EVENT_OBJ)
+
+
+def merge_table_mdi_pack_event_task() -> None:
+    _merge_table_task(SRC_MDI_PACK_EVENT_OBJ)
+
+
+def load_landing_mdi_pack_measure_task() -> None:
+    _load_landing_table_task(SRC_MDI_PACK_MEASURE_OBJ)
+
+
+def merge_table_mdi_pack_measure_task() -> None:
+    _merge_table_task(SRC_MDI_PACK_MEASURE_OBJ)
+
+
+def load_landing_mdi_note_task() -> None:
+    _load_landing_table_task(SRC_MDI_NOTE_OBJ)
+
+
+def merge_table_mdi_note_task() -> None:
+    _merge_table_task(SRC_MDI_NOTE_OBJ)
+
+def load_landing_mdi_ptnr_task() -> None:
+    _load_landing_table_task(SRC_MDI_PTNR_OBJ)
+
+
+def merge_table_mdi_ptnr_task() -> None:
+    _merge_table_task(SRC_MDI_PTNR_OBJ)
+
+
+ARTA_BRONZE_MERGE.PY
+
+from pathlib import Path
+from datetime import datetime
+from pyspark.sql import SparkSession
+# from spark.python.src.resources.constants import SQL_ROOT
+from typing import List, Dict, Any, Optional
+# ----------------------------
+# Helper functions (merge runner adapted from your draft)
+# ----------------------------
+from enum import Enum
+from pathlib import Path
+
+# Spark session 
+spark = SparkSession.builder \
+    .appName("AutoLoaderIngestion") \
+    .getOrCreate()
+
+def fqn(database: str, schema: str, table: str) -> str:
+    return f"{database}.{schema}.{table}"
+
+def read_sql_file(sql_path: Path) -> str:
+    print(f"SQL file path: {sql_path}")
+    # sql_path = Path(sql_path)
+    # if not sql_path.exists():
+    #     raise FileNotFoundError(f"SQL file not found: {sql_path}")
+    return sql_path.read_text(encoding="utf-8")
+
+
+def split_sql_statements(sql_script: str) -> List[str]:
+    """Split SQL script into statements by semicolon.
+    Handles semicolons inside quotes and SQL comments.
+    """
+    statements: List[str] = []
+    current: List[str] = []
+    i = 0
+    in_single_quote = False
+    in_double_quote = False
+    in_line_comment = False
+    in_block_comment = False
+
+    while i < len(sql_script):
+        ch = sql_script[i]
+        nxt = sql_script[i + 1] if i + 1 < len(sql_script) else ""
+
+        if in_line_comment:
+            current.append(ch)
+            if ch == "\n":
+                in_line_comment = False
+            i += 1
+            continue
+
+        if in_block_comment:
+            current.append(ch)
+            if ch == "*" and nxt == "/":
+                current.append(nxt)
+                in_block_comment = False
+                i += 2
+            else:
+                i += 1
+            continue
+
+        if not in_single_quote and not in_double_quote:
+            if ch == "-" and nxt == "-":
+                current.append(ch)
+                current.append(nxt)
+                in_line_comment = True
+                i += 2
+                continue
+            if ch == "/" and nxt == "*":
+                current.append(ch)
+                current.append(nxt)
+                in_block_comment = True
+                i += 2
+                continue
+
+        if ch == "'" and not in_double_quote:
+            in_single_quote = not in_single_quote
+            current.append(ch)
+            i += 1
+            continue
+
+        if ch == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+            current.append(ch)
+            i += 1
+            continue
+
+        if ch == ";" and not in_single_quote and not in_double_quote:
+            stmt = "".join(current).strip()
+            if stmt:
+                statements.append(stmt)
+            current = []
+            i += 1
+            continue
+
+        current.append(ch)
+        i += 1
+
+    tail = "".join(current).strip()
+    if tail:
+        statements.append(tail)
+
+    return statements
+
+
+def execute_sql_script(spark: SparkSession, sql_script: str, table_name: str) -> None:
+    statements = split_sql_statements(sql_script)
+    if not statements:
+        raise ValueError(f"[{table_name}] SQL script is empty after parsing.")
+
+    print(f"[{table_name}] Parsed {len(statements)} SQL statement(s).")
+    for idx, stmt in enumerate(statements, start=1):
+        print(f"[{table_name}] Executing statement {idx}/{len(statements)}")
+        spark.sql(stmt)
+
+def read_latest_checkpoint(spark: SparkSession, checkpoint_table: str, checkpoint_column: str, default_value: str, source_table: str) -> str:
+    """Read the latest checkpoint value for a given source_table row; return default if none."""
+    df = spark.table(checkpoint_table).filter(f"source_table = '{source_table}'")
+    if df.rdd.isEmpty():
+        return default_value
+    row = df.selectExpr(f"max({checkpoint_column}) as _max").collect()[0]
+    latest = row["_max"]
+    if latest is None:
+        return default_value
+    return str(latest)
+
+def update_checkpoint(spark: SparkSession, checkpoint_table: str, checkpoint_column: str, source_table: str):
+    current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    sql = f"""
+    MERGE INTO {checkpoint_table} AS target
+    USING (SELECT '{source_table}' AS source_table) AS source
+    ON target.source_table = source.source_table
+    WHEN MATCHED THEN
+      UPDATE SET {checkpoint_column} = '{current_timestamp}'
+    WHEN NOT MATCHED THEN
+      INSERT ({checkpoint_column}, source_table)
+      VALUES ('{current_timestamp}', '{source_table}')
+    """
+    spark.sql(sql)
+
+
+def find_and_load_sql_template(template_name):
+    from pathlib import Path
+    sql_path = Path(__file__).resolve().parents[3] / "sql" / "cleansed" / template_name
+    print(f"Loading SQL template: {sql_path}")
+    return sql_path.read_text(encoding="utf-8")
+
+# def paths_for_table(table: str, MERGE_SQL_TEMPLATE) -> Dict[str, Path]:
+#     """Return the expected extract and merge SQL file paths for a table.
+#        Customize this if your files are located differently.
+#     """
+#     root = Path(SQL_ROOT)
+#     merge = root / MERGE_SQL_TEMPLATE.format(table=table)
+#     return {"merge": merge}
+
+def merge_main(catalog,schema,table_name, MERGE_SQL_TEMPLATE):
+    import sys
+
+    import sys
+    import argparse
+    import os
+    print("arta_bronze is running")
+    source_table = fqn(catalog, schema, f"raw_{table_name}")
+    checkpoint_table = fqn(catalog, schema, "raw_table_checkpoint")  # example; replace if different
+    checkpoint_column = "last_modified_ts"  # example column name; replace as required
+    checkpoint_default = "1970-01-01 00:00:00"
+
+    try:
+        latest_checkpoint = read_latest_checkpoint(
+            spark=spark,
+            checkpoint_table=checkpoint_table,
+            checkpoint_column=checkpoint_column,
+            default_value=checkpoint_default,
+            source_table=source_table,
+        )
+    except Exception as e:
+        # If checkpoint table not present yet, use default
+        print(f"[{table_name}] Could not read checkpoint table: {e}. Using default.")
+        latest_checkpoint = checkpoint_default
+    
+    # merge_template = read_sql_file(merge_sql_path)
+    # Merge SQL may expect placeholders like {source_view} and {target_table}
+    merge_sql = MERGE_SQL_TEMPLATE.format(
+        catalog=catalog,
+        schema=schema,
+        checkpoint_literal=latest_checkpoint,
+    )
+
+    print(f"[{table_name}] Executing merge SQL script.")
+    execute_sql_script(spark=spark, sql_script=merge_sql, table_name=table_name)
+    print(f"[{table_name}] Merge SQL script executed successfully.")
+
+
+    # Update checkpoint after successful merge
+    try:
+        update_checkpoint(
+            spark=spark,
+            checkpoint_table=checkpoint_table,
+            checkpoint_column=checkpoint_column,
+            source_table=source_table,
+        )
+        print(f"[{table_name}] Checkpoint updated.")
+    except Exception as e:
+        print(f"[{table_name}] Failed to update checkpoint table: {e}")
+    print(f"[{table_name}] Merge task finished")
+
+
+if __name__ == "__main__":
+    import sys
+
+    import sys
+    import argparse
+    import os
+    
+    print("Starting merge script")
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='AutoLoader Ingestion')
+    parser.add_argument('--catalog', required=True, help='Source file path')
+    parser.add_argument('--schema', required=True, help='Target table name')
+    parser.add_argument('--table_name', required=True, help='Checkpoint path')
+    parser.add_argument('--merge_sql_template', required=True, help='File delimiter')
+
+    args = parser.parse_args()
+    sys.path.insert(0, "/Workspace/Repos")
+    sys.path.insert(0, os.getcwd())
+    catalog= args.catalog
+    schema= args.schema
+    table_name= args.table_name
+    merge_sql_template= args.merge_sql_template
+    sql_file=find_and_load_sql_template(merge_sql_template)
+    print(f"Arguments: {args}")
+    print("catalog:", catalog)
+    print("schema:", schema)
+    print("table_name:", table_name)
+    print("merge_sql_template:", merge_sql_template)
+
+    
+
+    merge_main(catalog, schema, table_name, sql_file)
+    # else:
+    #     print("Usage: python arta_bronze_merge.py <catalog> <schema> <table_name> [merge_sql_template]")

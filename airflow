@@ -1,0 +1,592 @@
+AIRFLOW
+
+LEAD TIME
+
+1import logging
+2from datetime import datetime, timedelta
+3from urllib.parse import urlparse
+4
+5import boto3
+6import jinja2 as jinja
+7import snowflake.connector
+8
+9from airflow import DAG
+10from airflow.models import Variable
+11from airflow.models.baseoperator import BaseOperator
+12from airflow.operators.empty import EmptyOperator
+13from airflow.operators.python import PythonOperator
+14from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
+15
+16
+17class SnowFlakeOperator(BaseOperator):
+18    """
+19    Executes sql code in a specific SnowFlake database
+20    :param snowflake_account_name: reference to a specific SnowFlake database
+21    :type snowflake_account_name: string
+22    :param sql: the sql code to be executed
+23    :type sql: Can receive a str representing a sql statement,
+24        a list of str (sql statements), or reference to a template file.
+25        Template reference are recognized by str ending in '.sql'
+26    """
+27
+28    template_fields = ('sql', 'parameters', 'autocommit')
+29    ui_color = '#ededef'
+30
+31    def __init__(self, sql, conn_id='snowflake', parameters=None,
+32                 autocommit=False, *args, **kwargs):
+33        super().__init__(*args, **kwargs)
+34        self.conn_id = conn_id
+35        if not self.conn_id:
+36            raise ValueError("Must provide reference to Snowflake connection in airflow!")
+37        self.sql = sql
+38        self.autocommit = autocommit
+39        self.parameters = parameters
+40
+41    def execute(self, context):
+42        logging.info('Executing SQL File: %s', str(self.sql))
+43        hook = SnowflakeHook(snowflake_conn_id=self.conn_id)
+44        conn_extra = hook.get_connection(self.conn_id).extra_dejson
+45        region = conn_extra.get('region', 'us-west-2')
+46        ctx = hook.get_conn()
+47        cs = None
+48        try:
+49            sql_file = str(self.sql).strip()
+50            file_content = self.get_content_from_s3(region, sql_file)
+51            sql_template = jinja.Template(file_content.decode("utf-8"))
+52
+53            if self.parameters is None:
+54                sql_resolved = sql_template.render(dummy='dummy')
+55            else:
+56                sql_resolved = sql_template.render(self.parameters)
+57            sql_statements = sql_resolved.split(';')
+58            logging.info('Resolved sql_statements: %s', sql_statements)
+59            cs = ctx.cursor()
+60            for stmt in sql_statements:
+61                stmt = stmt.strip()
+62                if not stmt:
+63                    continue
+64                cs.execute(stmt)
+65                logging.info('Finished sql: %s', stmt)
+66            logging.info("Finished executing %s", sql_file)
+67        finally:
+68            if cs is not None:
+69                cs.close()
+70            ctx.close()
+71            logging.info("Closed connection")
+72
+73    def get_content_from_s3(self, region, script_path):
+74        role_arn = 'arn:aws:iam::205857894628:role/scilm-map-s3'
+75        o = urlparse(script_path)
+76        bucket_name = o.netloc
+77        s3_object_key = o.path.strip('/')
+78        role_session_name = 'my-cross-account-role-session'
+79        sts_client = boto3.client('sts')
+80        logging.info("Pulling %s from s3 from %s bucket", s3_object_key, bucket_name)
+81        response = sts_client.assume_role(
+82            RoleArn=role_arn,
+83            RoleSessionName=role_session_name)
+84        credentials = response['Credentials']
+85        s3 = boto3.resource(
+86            's3',
+87            aws_access_key_id=credentials['AccessKeyId'],
+88            aws_secret_access_key=credentials['SecretAccessKey'],
+89            aws_session_token=credentials['SessionToken'],
+90        )
+91        bucket = s3.Bucket(bucket_name)
+92        file = bucket.Object(s3_object_key)
+93        contents = file.get()['Body'].read()
+94        return contents
+95
+96    def form_query_tag_sql(self, dg_nm, tsk_nm, tsk_exec_dt, dg_run_id, instance_ip):
+97        dag_id = ""
+98        task_name = ""
+99        operator_name = ""
+100        if dg_nm and str(dg_nm).lower() != 'none':
+101            dag_id = str(dg_nm).split(':')[1].replace('>', '')
+102        if tsk_nm and str(tsk_nm).lower() != 'none':
+103            task_name = str(tsk_nm).split(':')[1].replace('>', '')
+104            operator_name = str(tsk_nm).split(':')[0].split('(')[1].replace(')', '')
+105        json_str = (
+106            '{"dag_id": "' + dag_id.strip() + '", "dag_run_id": "' + dg_run_id.strip()
+107            + '", "task_id": "' + task_name.strip() + '", "task_execution_tmstmp": "'
+108            + tsk_exec_dt.strip() + '", "operator_name": "' + operator_name.strip()
+109            + '", "airflow_instance": "' + instance_ip.strip() + '"}'
+110        )
+111        logging.info(json_str)
+112        query_tag_sql = 'ALTER SESSION SET QUERY_TAG = \'' + json_str + '\GIDS\';'
+113        logging.info(query_tag_sql)
+114        return query_tag_sql
+115
+116
+117start_date = datetime(2023, 6, 12, 22, 00)
+118schedule_interval = '0 10 * * *'
+119task_concurrency = 15
+120max_simultaneous_run = 1
+121
+122dag_name = 'ILM_LEAD_TIME'
+123
+124
+125default_args = {
+126    'owner': 'ILM',
+127    'depends_on_past': False,
+128    'start_date': start_date,
+129    'email': ['Lst-Technology.MPSCA.Support.GoaL@nike.com', 'Lst-ILM-Support@Nike.com'],
+130    'email_on_failure': True,
+131    'email_on_retry': False,
+132    'retries': 0,
+133    'retry_delay': timedelta(minutes=1),
+134    'wait_for_downstream': False,
+135}
+136
+137
+138dag = DAG(
+139    dag_name,
+140    default_args=default_args,
+141    schedule=schedule_interval,
+142    max_active_runs=max_simultaneous_run,
+143    max_active_tasks=task_concurrency,
+144    catchup=False,
+145    tags=['ILM', 'LEAD_TIME', 'BI'],
+146)
+147
+148
+149def get_snowflake_conn():
+150    sf_admin_user = Variable.get("sf_admin_user")
+151    sf_admin_password = Variable.get("sf_admin_password")
+152    sf_rw_ilm_warehouse = Variable.get("sf_rw_ilm_warehouse")
+153    sf_rw_ilm_database = Variable.get("sf_rw_ilm_database")
+154    logging.info(sf_admin_user)
+155    connection = snowflake.connector.connect(
+156        user=sf_admin_user,
+157        password=sf_admin_password,
+158        account="nike",
+159        role=Variable.get("sf_readwrite_role"),
+160        warehouse=sf_rw_ilm_warehouse,
+161        database=sf_rw_ilm_database,
+162        authenticator="https://nike-classic.okta.com"
+163    )
+164    return connection
+165
+166
+167def load_snowflake():
+168    sf_ctx = get_snowflake_conn()
+169    sf_cs = None
+170    try:
+171        sf_cs = sf_ctx.cursor()
+172        ctas_sql = 'USE ROLE ALL'
+173        logging.info("ctas sql:%s", ctas_sql)
+174        sf_cs.execute(ctas_sql)
+175        logging.info("copy")
+176        logging.info(ctas_sql)
+177    finally:
+178        if sf_cs is not None:
+179            sf_cs.close()
+180        sf_ctx.close()
+181
+182
+183transportation_copy = PythonOperator(
+184    task_id='load_snowflake',
+185    python_callable=load_snowflake,
+186    dag=dag,
+187)
+188
+189dummy_dag_instance = EmptyOperator(
+190    task_id="dummy_instance",
+191    dag=dag)
+192
+193end_task = EmptyOperator(
+194    task_id="end_task",
+195    dag=dag)
+196
+197sf_copy_task = SnowFlakeOperator(
+198    task_id='load_lead_time',
+199    sql="""s3://edf-infrabootstrap-prod/airflow/ilm/prd/var/code/Consumption_Layer/DML/LEAD_TIME.sql""",
+200    conn_id='snowflake_ar',
+201    dag=dag)
+202
+203
+204dummy_dag_instance >> transportation_copy >> sf_copy_task >> end_task
+
+
+EMEA_FULFILLMENT
+
+   with TaskGroup(group_id="FULFILLMENT") as fulfillment_tg:
+        ###### FULFILLMENT
+        emea_fulfillment_landing_job_name = (
+            f"{(environment.lower())}_emea_fulfillment_landing"
+        )
+
+        fulfillment_landing = DatabricksRunNowOperator(
+            task_id="emea_ndf_fulfillment_landing",
+            databricks_conn_id="sole_react",
+            job_name=emea_fulfillment_landing_job_name,
+        )
+
+        emea_fulfillment_stage_job_name = (
+            f"{(environment.lower())}_emea_fulfillment_stage"
+        )
+
+        fulfillment_stage = DatabricksRunNowOperator(
+            task_id="emea_ndf_fulfillment_landing_stage",
+            databricks_conn_id="sole_react",
+            job_name=emea_fulfillment_stage_job_name,
+        )
+
+        emea_fulfillment_integrated_job_name = (
+            f"{(environment.lower())}_emea_fulfillment_integrated"
+        )
+        fulfillment_integrated = DatabricksRunNowOperator(
+            task_id="emea_ndf_fulfillment_integrated",
+            databricks_conn_id="sole_react",
+            job_name=emea_fulfillment_integrated_job_name,
+        )
+
+        (
+            # wait_for_0015_task
+            wait_for_2330_task
+            >> fulfillment_landing
+            >> fulfillment_stage
+            >> fulfillment_integrated
+        )
+        reference_tg >> fulfillment_integrated
+        ilm_stage_tg >> fulfillment_integrated
+        fulfillment_integrated >> integrated_end
+        groups.append(fulfillment_tg)
+
+
+ILM_snoflake table 
+
+1import logging
+2from airflow import DAG
+3from datetime import datetime, timedelta, date
+4from airflow.operators.python import PythonOperator
+5import os
+6from airflow.models import Variable
+7from airflow.models.baseoperator import BaseOperator
+8from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
+9from airflow.operators.empty import EmptyOperator
+10
+11import boto3
+12import jinja2 as jinja
+13
+14import snowflake.connector
+15
+16from urllib.parse import urlparse
+17import logging
+18from airflow.providers.common.sql.hooks.sql import DbApiHook
+19import jinja2 as jinja
+20start_date = datetime(2023, 6, 22, 16, 45)
+21task_concurrency = 15
+22max_simultaneous_run = 1
+23schedule_interval = '0 */3 * * *'
+24support_email_id = ""
+25
+26dag_name = 'ILM_AR_MDI_NOTE'
+27mysql_conn_id = "ar_mysql"
+28
+29#mssql table queries
+30ms_input_message_tbl = "ilmdev.MDI_NOTE"
+31ms_get_file_path_sql = "SELECT table_name, s3path, s3obj_tmstp, activeind FROM " + ms_input_message_tbl + \
+32                       "  WHERE activeind = 'Y' ORDER BY s3obj_tmstp LIMIT " + str(Variable.get("num_ar_msg")) + ";"
+33ms_get_unprocessed_files = "SELECT s3path FROM " + ms_input_message_tbl + " WHERE activeind = 'N';"
+34ms_set_inactive_tmpl = "UPDATE " + ms_input_message_tbl + " SET activeind = 'N' WHERE s3path IN ( "
+35ms_del_inactive_sql = "DELETE FROM " + ms_input_message_tbl+" WHERE activeind = 'N';"
+36
+37#snowflake table queries
+38sf_stg_tbl_nm = "SC_GFLS_ILM_AR_PROD.STAGE.MDI_NOTE"
+39sf_ar_msg_tbl_nm = "STAGE.AR_MESSAGES"
+40sf_use_schema_sql = "USE SCHEMA STAGE;"
+41sf_truncate_tbl_sql = "DELETE FROM " + sf_stg_tbl_nm + ";"
+42sf_insrt_sf_ar_msg_tbl_tmpl = "INSERT INTO " + sf_ar_msg_tbl_nm + " values "
+43
+44relative_file_dir = "/MDI_NOTE/"
+45sf_stg_path = "s3://"+Variable.get("raw_bucket")+"/storeops"
+46ar_table_name = "MDI_NOTE"
+47sf_xform_schema = "STAGE"
+48
+49default_args = {
+50    'owner': 'ILM',
+51    'depends_on_past': False,
+52    'start_date': start_date,
+53    #'email': 'Lst-Technology.MPSCA.Support.GoaL@nike.com',
+54    'email': ['Lst-Technology.MPSCA.Support.GoaL@nike.com','Lst-ILM-Support@Nike.com'],
+55    'email_on_failure': True,
+56    'email_on_retry': False,
+57    'retries': 0,
+58    'retry_delay': timedelta(minutes=1),
+59    'wait_for_downstream': False,
+60}
+61
+62class SnowFlakeOperator(BaseOperator):
+63    """
+64    Executes sql code in a specific SnowFlake database
+65    :param snowflake_account_name: reference to a specific SnowFlake database
+66    :type snowflake_account_name: string
+67    :param sql: the sql code to be executed
+68    :type sql: Can receive a str representing a sql statement,
+69        a list of str (sql statements), or reference to a template file.
+70        Template reference are recognized by str ending in '.sql'
+71    """
+72
+73    template_fields = ('sql', 'parameters', 'autocommit')
+74    ui_color = '#ededef'
+75    def __init__(self, sql, conn_id='snowflake', parameters=None,
+76                 autocommit=False, *args, **kwargs):
+77        super().__init__(*args, **kwargs)
+78        self.conn_id = conn_id
+79        if not self.conn_id:
+80            raise ValueError("Must provide reference to Snowflake connection in airflow!")
+81        self.sql = sql
+82        self.autocommit = autocommit
+83        self.parameters = parameters
+84
+85    def execute(self, context):
+86        logging.info('Executing SQL File: %s', str(self.sql))
+87        hook = SnowflakeHook(snowflake_conn_id=self.conn_id)
+88        conn_extra = hook.get_connection(self.conn_id).extra_dejson
+89        region = conn_extra.get('region', 'us-west-2')
+90        ctx = hook.get_conn()
+91        cs = None
+92        try:
+93            sql_file = str(self.sql).strip()
+94            file_content = self.get_content_from_s3(region, sql_file)
+95            sql_template = jinja.Template(file_content.decode("utf-8"))
+96
+97            if self.parameters is None:
+98                sql_resolved = sql_template.render(dummy='dummy')
+99            else:
+100                sql_resolved = sql_template.render(self.parameters)
+101            sql_statements = sql_resolved.split(';')
+102            logging.info('Resolved sql_statements: %s', sql_statements)
+103            cs = ctx.cursor()
+104            for stmt in sql_statements:
+105                stmt = stmt.strip()
+106                if not stmt:
+107                    continue
+108                cs.execute(stmt)
+109                logging.info('Finished sql: %s', stmt)
+110            logging.info("Finished executing %s", sql_file)
+111        finally:
+112            if cs is not None:
+113                cs.close()
+114            ctx.close()
+115            logging.info("Closed connection")
+116
+117    def get_content_from_s3(self, region, script_path):
+118        role_arn = 'arn:aws:iam::205857894628:role/scilm-map-s3'
+119        o = urlparse(script_path)
+120        bucket_name = o.netloc
+121        s3_object_key = o.path.strip('/')
+122        role_session_name = 'my-cross-account-role-session'
+123        sts_client = boto3.client('sts')
+124        logging.info("Pulling %s from s3 from %s bucket", s3_object_key, bucket_name)
+125        response = sts_client.assume_role(
+126            RoleArn=role_arn,
+127            RoleSessionName=role_session_name)
+128        credentials = response['Credentials']
+129        s3 = boto3.resource(
+130            's3',
+131            aws_access_key_id=credentials['AccessKeyId'],
+132            aws_secret_access_key=credentials['SecretAccessKey'],
+133            aws_session_token=credentials['SessionToken'],
+134        )
+135        bucket = s3.Bucket(bucket_name)
+136        file = bucket.Object(s3_object_key)
+137        contents = file.get()['Body'].read()
+138        return contents
+139
+140    def form_query_tag_sql(self, dg_nm, tsk_nm, tsk_exec_dt, dg_run_id, instance_ip):
+141        dag_id = ""
+142        task_name = ""
+143        operator_name = ""
+144        if dg_nm and str(dg_nm).lower() != 'none':
+145            dag_id = str(dg_nm).split(':')[1].replace('>', '')
+146        if tsk_nm and str(tsk_nm).lower() != 'none':
+147            task_name = str(tsk_nm).split(':')[1].replace('>', '')
+148            operator_name = str(tsk_nm).split(':')[0].split('(')[1].replace(')', '')
+149        json_str = (
+150            '{"dag_id": "' + dag_id.strip() + '", "dag_run_id": "' + dg_run_id.strip()
+151            + '", "task_id": "' + task_name.strip() + '", "task_execution_tmstmp": "'
+152            + tsk_exec_dt.strip() + '", "operator_name": "' + operator_name.strip()
+153            + '", "airflow_instance": "' + instance_ip.strip() + '"}'
+154        )
+155        logging.info(json_str)
+156        query_tag_sql = "ALTER SESSION SET QUERY_TAG = '" + json_str + "\\GIDS';"
+157        logging.info(query_tag_sql)
+158        return query_tag_sql
+159
+160    def form_query_tag_sql(self, dg_nm, tsk_nm, tsk_exec_dt, dg_run_id, instance_ip):
+161        dag_id = ""
+162        task_name = ""
+163        operator_name = ""
+164        if dg_nm and str(dg_nm).lower() != 'none':
+165            dag_id = str(dg_nm).split(':')[1].replace('>', '')
+166        if tsk_nm and str(tsk_nm).lower() != 'none':
+167            task_name = str(tsk_nm).split(':')[1].replace('>', '')
+168            operator_name = str(tsk_nm).split(':')[0].split('(')[1].replace(')', '')
+169        json_str = (
+170            '{"dag_id": "' + dag_id.strip() + '", "dag_run_id": "' + dg_run_id.strip()
+171            + '", "task_id": "' + task_name.strip() + '", "task_execution_tmstmp": "'
+172            + tsk_exec_dt.strip() + '", "operator_name": "' + operator_name.strip()
+173            + '", "airflow_instance": "' + instance_ip.strip() + '"}'
+174        )
+175        logging.info(json_str)
+176        query_tag_sql = "ALTER SESSION SET QUERY_TAG = '" + json_str + "\\GIDS';"
+177        logging.info(query_tag_sql)
+178        return query_tag_sql
+179dag = DAG(
+180    dag_name, default_args=default_args, schedule=schedule_interval,
+181    max_active_runs=max_simultaneous_run,
+182    max_active_tasks=task_concurrency,
+183    catchup=False,
+184    tags=['Foundational'],)
+185
+186def get_count(table_name,cursor,clause):
+187    get_cnt_sql = "SELECT COUNT(*) FROM "+table_name + " " + clause + ";"
+188    table_count = cursor.execute(get_cnt_sql).fetchone()
+189    logging.info("{get_cnt_sql} count:= {table_count} ".format(get_cnt_sql=get_cnt_sql,table_count=table_count[0]))
+190
+191def get_snowflake_conn():
+192    sf_admin_user = Variable.get("sf_admin_user")
+193    sf_admin_password = Variable.get("sf_admin_password")
+194    sf_rw_ilm_prod_warehouse = Variable.get("sf_rw_ilm_prod_warehouse")
+195    sf_rw_ilm_ar_database = Variable.get("sf_rw_ilm_ar_database")
+196    return snowflake.connector.connect(
+197        user=sf_admin_user,
+198        password=sf_admin_password,
+199        account="nike",
+200        role=Variable.get("sf_readwrite_role"),
+201        warehouse=sf_rw_ilm_prod_warehouse,
+202        database=sf_rw_ilm_ar_database,
+203        authenticator="https://nike-classic.okta.com",
+204    )
+205
+206def load_s3_to_stg(**kwargs):
+207    #Get SnowFlake connection and cursor to excecute SF queries
+208    sf_ctx = get_snowflake_conn()
+209    sf_cs = sf_ctx.cursor()
+210    sf_cs.execute(sf_use_schema_sql)
+211
+212    try:
+213        sf_copy_into_sql = "COPY INTO " + sf_stg_tbl_nm + " FROM @ILM_STAGE/"+ar_table_name + \
+214                           "/\nFILE_FORMAT = (type = json);"
+215
+216        sf_cs.execute(sf_copy_into_sql)
+217        logging.info("Finished executing SF copy into SQL = {copy_into_cmd}".format(copy_into_cmd=sf_copy_into_sql))
+218
+219        get_count(sf_stg_tbl_nm,sf_cs,"WHERE Child:OPERATION_TYPE = 'I'")
+220        get_count(sf_stg_tbl_nm,sf_cs,"WHERE Child:OPERATION_TYPE = 'U'")
+221        get_count(sf_stg_tbl_nm,sf_cs,"WHERE Child:OPERATION_TYPE = 'D'")
+222
+223    except Exception as e:
+224        logging.error(e)
+225        raise e
+226
+227    finally:
+228        sf_ctx.close()
+229        sf_cs.close()
+230        logging.info("Closed SF connection")
+231
+232def dag_instance_validation(**kwargs):
+233    ''' Lists all files in the S3 directory to process'''
+234    mysql = MySqlHook(mysql_conn_id="airflow_db_conn")
+235    conn = mysql.get_conn()
+236    cursor = conn.cursor()
+237    stmt = "select count(*) from dag_run where dag_id= '" + dag_name + "' and state in ('running','failed')"
+238    logging.info(stmt)
+239    cursor.execute(stmt)
+240    count = cursor.fetchone()[0]
+241    logging.info(count)
+242    if(count > 1):
+243        raise RuntimeError("multiple instances running or previous task is failed")
+244    '''else:
+245        time.sleep(120)
+246        cursor.execute(stmt)
+247        count = cursor.fetchone()[0]
+248        logging.info(count)
+249        if(count > 1):
+250            raise RuntimeError("multiple instances running")
+251    '''
+252    cursor.close()
+253    conn.close()
+254
+255def load_snowflake(**kwargs):
+256
+257    sf_ctx = get_snowflake_conn()
+258    sf_cs = sf_ctx.cursor()
+259    ctas_sql= 'USE ROLE ALL'
+260    logging.info("ctas sql:"+ctas_sql)
+261    sf_cs.execute(ctas_sql)
+262    logging.info("copy")
+263    logging.info(ctas_sql)
+264    sf_cs.close()
+265
+266transportation_copy = PythonOperator(
+267    task_id='load_snowflake',
+268    python_callable=load_snowflake,
+269    dag=dag
+270
+271)
+272
+273def delete_from_sf_stg(**kwargs):
+274    #Get SnowFlake connection and cursor to excecute SF queries
+275    sf_del_stg_sql = ""
+276    sf_ctx = get_snowflake_conn()
+277    sf_cs = sf_ctx.cursor()
+278    sf_cs.execute(sf_use_schema_sql)
+279
+280    try:
+281        sf_xform_file_nm = ar_table_name + '/' + ar_table_name  + '.csv'
+282        logging.info("sf_xform_file_nm %s " % sf_xform_file_nm)
+283        sf_cs.execute("USE SCHEMA {schema_nm}".format(schema_nm=sf_xform_schema))
+284        remove_sf_files = "remove @ILM_AR_SFS3/" + sf_xform_file_nm
+285        sf_cs.execute(remove_sf_files)
+286        logging.info("Finished Executing {sql} ".format(sql=remove_sf_files))
+287        sf_cs.execute(sf_use_schema_sql)
+288        sf_del_stg_sql = "DELETE FROM " + sf_stg_tbl_nm + " ;"
+289
+290        sf_cs.execute(sf_del_stg_sql)
+291        logging.info("Finished executing sf_del_stg_sql = {sf_del_stg_sql}".format(sf_del_stg_sql=sf_del_stg_sql))
+292
+293    except Exception as e:
+294        logging.error(e)
+295        raise e
+296
+297    finally:
+298        sf_ctx.close()
+299        sf_cs.close()
+300        logging.info("Closed SF connection")
+301
+302load_s3_to_stg = PythonOperator(
+303    task_id="load_s3_to_stg",
+304    python_callable=load_s3_to_stg,
+305    dag=dag)
+306
+307load_stg_to_core = SnowFlakeOperator(
+308    task_id='load_stg_to_core',
+309    sql="""s3://edf-infrabootstrap-prod/airflow/ilm/prd/var/code/AmberRoad/dml/delta/MDI_NOTE.sql""",
+310    conn_id="snowflake_ar",
+311    dag=dag
+312)
+313
+314#dummy_dag_instance = EmptyOperator(
+315dummy_dag_instance = EmptyOperator(
+316    task_id="dummy_instance",
+317    dag=dag)
+318
+319delete_from_sf_stg = PythonOperator(
+320    task_id="delete_from_sf_stg",
+321    python_callable=delete_from_sf_stg,
+322    retries=0,
+323    dag=dag)
+324
+325#finished_all = EmptyOperator(
+326finished_all = EmptyOperator(
+327    task_id='Finish',
+328    dag=dag)
+329
+330dummy_dag_instance >> transportation_copy
+331transportation_copy >> load_s3_to_stg
+332load_s3_to_stg >> load_stg_to_core
+333load_stg_to_core >> delete_from_sf_stg
+334delete_from_sf_stg >> finished_all

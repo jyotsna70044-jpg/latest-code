@@ -1,0 +1,1438 @@
+Explain 2
+
+Fulfillment
+
+WORKFLOW
+
+1)CONFIG
+
+workflow:
+    name: ilm_fulfillment
+    cluster_name: cluster_ilm_fulfillment
+
+cluster:
+    spark_version: 14.3.x-scala2.12
+    policy_id: 0001168AEB0E685D
+    runtime_engine: STANDARD
+    custom_tags:
+        nike-squad: inbound_transportation
+        nike-environment: prod
+        nike-techsolution: inbound_transportation
+        nike-initiative: inbound_transportation
+    aws_attributes:
+        availability: ON_DEMAND
+        ebs_volume_count: 1
+        ebs_volume_size: 100
+        instance_profile_arn: arn:aws:iam::443370701835:instance-profile/sole/group/inbound_transportation
+    spark_conf:
+        spark.sql.extensions: io.delta.sql.DeltaSparkSessionExtension
+        spark.sql.catalog.spark_catalog: org.apache.spark.sql.delta.catalog.DeltaCatalog
+
+landing:
+    catalog: non_published_domain
+    schema: ilm
+    databricks_host: "https://nike-sole-react-2.cloud.databricks.com"
+    secret_scope: "inbound_service_prod"
+    secret_key: "sp_pat_token"
+    stage_job_id: 0
+
+task_settings:
+    max_retries: 1
+    min_retry_interval_millis: 120000
+
+schedules:
+    schedule: null
+
+sole:
+    job_webhook_notifications_id: 5495d250-8018-4956-a53b-4a5c14a61abd
+    permissions:
+        can_manage:
+            - App.NikeSole.inbound_transportation.DataAdmin
+            - App.NikeSole.inbound_transportation.Developer
+        can_view:
+            - App.NikeSole.inbound_transportation.Analyst
+
+# Workflow level configurations
+landing_stage:
+    min_workers: 1
+    max_workers: 8
+    node_type: mgd-fleet.2xlarge
+    driver_node_type: mgd-fleet.2xlarge
+
+2. LANDING
+
+import requests
+
+from brickflow import TaskSettings
+from brickflow.bundles.model import JobsHealthRules
+from brickflow.context import ctx
+from brickflow.engine.workflow import WorkflowWebhookNotifications
+from emea_inbound.workflow.default import SquidCluster, SquidWorkflow
+
+from spark.python.src.core.tasks_base import TasksBase
+from spark.python.src.tasks.landing import load_ndf_landing_uc
+from workflows.shared_lib.constants import CriticalityTagConstants
+from workflows.shared_lib.shared_functions import ctx_workflows
+
+log = TasksBase.log(__name__)
+
+#   Define the Job Cluster configuration
+job_wf_name = "fulfillment_landing"
+
+min_workers = (
+    int(ctx_workflows.get("landing_stage.min_workers")) if ctx_workflows.contains("landing_stage.min_workers") else None
+)
+max_workers = (
+    int(ctx_workflows.get("landing_stage.max_workers")) if ctx_workflows.contains("landing_stage.max_workers") else None
+)
+node_type = ctx_workflows.get("landing_stage.node_type") if ctx_workflows.contains("landing_stage.node_type") else None
+driver_node_type = (
+    ctx_workflows.get("landing_stage.driver_node_type")
+    if ctx_workflows.contains("landing_stage.driver_node_type")
+    else None
+)
+_default_cluster = SquidCluster(
+    ctx_workflows=ctx_workflows,
+    name=job_wf_name,
+    min_workers=min_workers,
+    max_workers=max_workers,
+    node_type_id=node_type,
+    driver_node_type_id=driver_node_type,
+    custom_tags={
+        "nike-squad": "inbound_transportation",
+        "nike-environment": ctx.env,
+        "nike-techsolution": "inbound_transportation",
+        "nike-initiative": "inbound_transportation",
+    },
+)
+
+
+log.info(f"Default Cluster: {_default_cluster}")
+wf = SquidWorkflow(
+    name=job_wf_name,
+    ctx_workflows=ctx_workflows,
+    schedule_quartz_expression="0 30 4 * * ?",
+    schedule_pause_status="UNPAUSED",
+    default_cluster=_default_cluster,
+    health=[JobsHealthRules(metric="RUN_DURATION_SECONDS", op="GREATER_THAN", value=3600)],  # 1 hour
+    webhook_notifications=WorkflowWebhookNotifications(),
+    custom_tags={
+        "criticality": CriticalityTagConstants.Essential.value,
+        "auto-run": "true",
+    },
+    default_task_settings=TaskSettings(
+        max_retries=2,
+    ),
+)
+
+wf.timezone = "UTC"
+TasksBase(ctx_workflows.to_dict())
+
+
+
+@wf.task()
+def load_landing_ndf_delivery_task():
+    load_ndf_landing_uc.load_ndf_landing_delivery_task()
+
+
+@wf.task()
+def load_land_ndf_delivery_item_task():
+    load_ndf_landing_uc.load_ndf_landing_delivery_item_task()
+
+
+@wf.task()
+def load_ndf_landing_delivery_schedule_line_task():
+    load_ndf_landing_uc.load_ndf_landing_delivery_schedule_line_task()
+
+
+@wf.task()
+def load_ndf_landing_delivery_date_event_task():
+    load_ndf_landing_uc.load_ndf_landing_delivery_date_event_task()
+
+
+
+
+stage_job_id = int(ctx_workflows.get("landing.stage_job_id"))
+databricks_host = ctx_workflows.get("landing.databricks_host")
+secret_scope = ctx_workflows.get("landing.secret_scope")
+secret_key = ctx_workflows.get("landing.secret_key")
+
+
+@wf.task(
+    depends_on=[
+        "load_landing_ndf_delivery_task",
+        "load_land_ndf_delivery_item_task",
+        "load_ndf_landing_delivery_schedule_line_task",
+        "load_ndf_landing_delivery_date_event_task",
+    ]
+)
+
+
+
+def trigger_stage_workflow():
+    api_token = ctx.dbutils.secrets.get(secret_scope, secret_key)
+    url = f"{databricks_host.rstrip('/')}/api/2.1/jobs/run-now"
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json",
+    }
+    response = requests.post(url, json={"job_id": stage_job_id}, headers=headers)
+    response.raise_for_status()
+    run_id = response.json().get("run_id")
+    log.info(f"Triggered stage workflow (job_id={stage_job_id}), run_id={run_id}")
+
+1. STAGE
+
+from brickflow import TaskSettings
+from brickflow.bundles.model import JobsHealthRules
+from brickflow.context import ctx
+from brickflow.engine.workflow import WorkflowWebhookNotifications
+from emea_inbound.workflow.default import SquidCluster, SquidWorkflow
+
+from spark.python.src.core.tasks_base import TasksBase
+from spark.python.src.tasks.stage import load_ndf_stage_uc
+from workflows.shared_lib.constants import CriticalityTagConstants
+from workflows.shared_lib.shared_functions import ctx_workflows
+
+log = TasksBase.log(__name__)
+
+#   Define the Job Cluster configuration
+job_wf_name = "fulfillment_stage"
+
+min_workers = (
+    int(ctx_workflows.get("landing_stage.min_workers")) if ctx_workflows.contains("landing_stage.min_workers") else None
+)
+max_workers = (
+    int(ctx_workflows.get("landing_stage.max_workers")) if ctx_workflows.contains("landing_stage.max_workers") else None
+)
+node_type = ctx_workflows.get("landing_stage.node_type") if ctx_workflows.contains("landing_stage.node_type") else None
+driver_node_type = (
+    ctx_workflows.get("landing_stage.driver_node_type")
+    if ctx_workflows.contains("landing_stage.driver_node_type")
+    else None
+)
+_default_cluster = SquidCluster(
+    ctx_workflows=ctx_workflows,
+    name=job_wf_name,
+    min_workers=min_workers,
+    max_workers=max_workers,
+    node_type_id=node_type,
+    driver_node_type_id=driver_node_type,
+    custom_tags={
+        "nike-squad": "inbound_transportation",
+        "nike-environment": ctx.env,
+        "nike-techsolution": "inbound_transportation",
+        "nike-initiative": "inbound_transportation",
+    },
+)
+
+
+
+log.info(f"Default Cluster: {_default_cluster}")
+wf = SquidWorkflow(
+    name=job_wf_name,
+    ctx_workflows=ctx_workflows,
+    schedule_quartz_expression=None,
+    schedule_pause_status="UNPAUSED",
+    default_cluster=_default_cluster,
+    health=[JobsHealthRules(metric="RUN_DURATION_SECONDS", op="GREATER_THAN", value=3600)],  # 1 hour
+    webhook_notifications=WorkflowWebhookNotifications(),
+    custom_tags={
+        "criticality": CriticalityTagConstants.Essential.value,
+        "auto-run": "false",
+    },
+    default_task_settings=TaskSettings(
+        max_retries=2,
+    ),
+)
+
+
+
+wf.timezone = "UTC"
+TasksBase(ctx_workflows.to_dict())
+
+
+
+@wf.task()
+def load_ndf_stage_delivery_item_task():
+    load_ndf_stage_uc.load_ndf_delivery_item_task()
+
+3. INTEGRATED
+
+from brickflow import TaskSettings
+from brickflow.bundles.model import JobsHealthRules
+from brickflow.context import ctx
+from brickflow.engine.workflow import WorkflowWebhookNotifications
+from emea_inbound.workflow.default import SquidCluster, SquidWorkflow
+
+from spark.python.src.core.tasks_base import TasksBase
+from spark.python.src.tasks.integrated import load_ndf_integrated_delivery
+from workflows.shared_lib.constants import CriticalityTagConstants
+from workflows.shared_lib.shared_functions import ctx_workflows
+
+log = TasksBase.log(__name__)
+
+#   Define the Job Cluster configuration for the fulfillment integrated workflow.
+job_wf_name = "fulfillment_integrated"
+
+min_workers = (
+    int(ctx_workflows.get("landing_stage.min_workers")) if ctx_workflows.contains("landing_stage.min_workers") else None
+)
+max_workers = (
+    int(ctx_workflows.get("landing_stage.max_workers")) if ctx_workflows.contains("landing_stage.max_workers") else None
+)
+node_type = ctx_workflows.get("landing_stage.node_type") if ctx_workflows.contains("landing_stage.node_type") else None
+driver_node_type = (
+    ctx_workflows.get("landing_stage.driver_node_type")
+    if ctx_workflows.contains("landing_stage.driver_node_type")
+    else None
+)
+_default_cluster = SquidCluster(
+    ctx_workflows=ctx_workflows,
+    name=job_wf_name,
+    min_workers=min_workers,
+    max_workers=max_workers,
+    node_type_id=node_type,
+    driver_node_type_id=driver_node_type,
+    custom_tags={
+        "nike-squad": "inbound_transportation",
+        "nike-environment": ctx.env,
+        "nike-techsolution": "inbound_transportation",
+        "nike-initiative": "inbound_transportation",
+    },
+)
+
+log.info(f"Default Cluster: {_default_cluster}")
+wf = SquidWorkflow(
+    name=job_wf_name,
+    ctx_workflows=ctx_workflows,
+    schedule_quartz_expression=None,
+    schedule_pause_status="UNPAUSED",
+    default_cluster=_default_cluster,
+    health=[JobsHealthRules(metric="RUN_DURATION_SECONDS", op="GREATER_THAN", value=2 * 3600)],  # 2 hours
+    webhook_notifications=WorkflowWebhookNotifications(),
+    custom_tags={
+        "criticality": CriticalityTagConstants.Essential.value,
+        "auto-run": "false",
+    },
+    default_task_settings=TaskSettings(
+        max_retries=2,
+    ),
+)
+
+wf.timezone = "UTC"
+TasksBase(ctx_workflows.to_dict())
+
+
+@wf.task()
+def integrated_delivery_item_task():
+    load_ndf_integrated_delivery.load_integrated_delivery_item()
+
+
+
+SPARK/PYTHON
+
+1. CONFIG
+
+source:
+    dbx:
+        fulfillment:
+            catalog: published_domain
+            schema: fulfillment_request
+            cdc_column: etl_tmst_utc
+
+landing:
+    catalog: non_published_domain
+    schema: ilm
+    drop: false # If true, drop the table before creating it
+    truncate: false # If true, truncate the table before loading it
+    lookback_days: 2920
+
+stage:
+    catalog: non_published_domain
+    schema: ilm
+    snowflake:
+        sync: false
+    custom_sql:
+        po_header_logic: case when ldsl.physical_source_id = 77 then ldsl.po_header_nbr else ldi.po_header_nbr end
+
+integrated:
+    catalog: non_published_domain
+    schema: ilm
+    snowflake:
+        sync: false
+    reference_schema:
+        ilm_landing: ilm
+        ilm_arta_stage: ilm
+        ilm_pega_stage: ilm
+        ilm_sap_stage: ilm
+        purchase_order_landing: ilm
+        purchase_order_stage: ilm
+        purchase_order_integrated: ilm
+
+2. SQL
+A) STAGE
+——
+
+/*
+================================================================================
+Stage Table: stage_ndf_delivery_item_t
+================================================================================
+Description:
+    This SQL transforms and stages delivery item data from NDF (Nike Data
+    Foundation) landing tables. The data represents delivery schedule line items
+    with associated header and item information including quantities, weights,
+    and purchase order references.
+
+Primary Keys (for deduplication):
+    - inbound_delivery_header_number          -- [PK]
+    - inbound_delivery_item_number            -- [PK]
+    - inbound_delivery_schedule_line_number   -- [PK]
+    - physical_source_id                      -- [PK]
+
+Source Tables:
+    Landing:
+        - landing_ndf_delivery_schedule_line_t : Delivery schedule line (driving table)
+        - landing_ndf_delivery_item_t          : Delivery item details
+        - landing_ndf_delivery_t               : Delivery header information
+
+CDC Strategy:
+    - Captures changes based on ${landing_commit_tmst_col} from all landing tables
+    - Uses LEAST() to determine the latest_processed_stage_tmst for watermarking
+
+Filter Conditions:
+    - CDC filter: Any source table timestamp >= ${last_processed_tmst}
+    - tx_type filter: N/A (NDF tables don't have tx_type column)
+
+Compatibility:
+    - Databricks SQL: Yes (uses subquery pattern for final deduplication)
+    - PySpark SQL: Yes
+
+Output:
+    Deduplicated delivery items with product codes, quantities, weights,
+    and purchase order references.
+================================================================================
+*/
+
+-- =============================================================================
+-- CTE: delta_changes
+-- Purpose: Capture all changed records from source tables since last processed
+--          timestamp and join all required tables
+-- =============================================================================
+WITH delta_changes AS (
+    SELECT
+        -- =====================================================================
+        -- Primary Key Fields [PK]
+        -- =====================================================================
+        ldsl.delivery_nbr AS inbound_delivery_header_number,                    -- [PK]
+        ldsl.delivery_item_nbr AS inbound_delivery_item_number,                 -- [PK]
+        ldsl.delivery_schedule_line_nbr AS inbound_delivery_schedule_line_number, -- [PK]
+        ldsl.physical_source_id AS physical_source_id,                          -- [PK]
+
+        -- =====================================================================
+        -- Delivery Information
+        -- =====================================================================
+        ldi.delivery_create_dt AS inbound_delivery_header_create_date,
+        ldde.actual_goods_movement_dt AS actual_goods_movement_dt,
+        ldi.product_cd AS product_code,
+        ldsl.size_cd AS size_code,
+        ldsl.quality_cd AS quality_code,
+        ldsl.geo_cd_part AS geo_cd_part,
+        ldh.receiving_location_cd AS receiving_location_code,
+        ldh.delivery_direction_cd AS delivery_direction_cd,
+
+        -- =====================================================================
+        -- Purchase Order Reference
+        -- =====================================================================
+        ${po_header_logic} AS purchase_order_header_number,
+        CAST(
+            CASE
+                WHEN ldsl.physical_source_id = 77 THEN ldsl.po_item_nbr
+                ELSE ldi.po_item_nbr
+            END AS INT
+        ) AS purchase_order_item_number,
+        CAST(ldsl.po_item_variant_nbr AS INT) AS purchase_order_item_variant_number,
+
+        -- =====================================================================
+        -- Quantity Measures
+        -- =====================================================================
+        ldsl.delivery_base_qty AS inbound_delivery_size_base_quantity,
+        ldh.carton_qty AS header_total_cartons,
+        ldsl.delivery_gross_wt_kg AS inbound_delivery_size_gross_weight_kg,
+        ldsl.delivery_net_wt_kg AS inbound_delivery_size_net_weight_kg,
+        ldsl.delivery_vol AS inbound_delivery_size_gross_volume,
+
+        -- =====================================================================
+        -- Active Indicator
+        -- =====================================================================
+        CASE
+            WHEN COALESCE(ldsl.transaction_delete_ind, 'N') = 'N' THEN 1
+            ELSE 0
+        END
+        * CASE
+            WHEN COALESCE(ldi.transaction_delete_ind, 'N') = 'N' THEN 1
+            ELSE 0
+        END
+        * CASE
+            WHEN COALESCE(ldh.transaction_delete_ind, 'N') = 'N' THEN 1
+            ELSE 0
+        END AS active_indicator,
+
+        -- =====================================================================
+        -- CDC Timestamps (for tracking changes from each source)
+        -- =====================================================================
+        ldsl.${landing_commit_tmst_col} AS ldsl_commit_tmst,
+        ldi.${landing_commit_tmst_col} AS ldi_commit_tmst,
+        ldh.${landing_commit_tmst_col} AS ldh_commit_tmst,
+
+        -- =====================================================================
+        -- CDC Timestamp: Used for watermarking and incremental processing
+        -- latest_processed_stage_tmst: Minimum of all source timestamps (conservative)
+        -- =====================================================================
+        CAST(
+            LEAST(
+                ldsl.${landing_commit_tmst_col},
+                ldi.${landing_commit_tmst_col},
+                ldh.${landing_commit_tmst_col}
+            ) AS TIMESTAMP
+        ) AS latest_processed_stage_tmst
+
+    FROM
+        ${landing_catalog}.${landing_schema}.landing_ndf_delivery_schedule_line_t AS ldsl
+
+        -- =====================================================================
+        -- LEFT JOIN: Delivery date event details 
+        -- =====================================================================
+        LEFT JOIN ${landing_catalog}.${landing_schema}.landing_ndf_delivery_date_event_t AS ldde
+            ON ldsl.delivery_nbr = ldde.delivery_nbr
+            -- AND ldsl.delivery_create_dt = ldde.delivery_create_dt
+            AND ldsl.physical_source_id = ldde.physical_source_id
+            AND ldsl.geo_cd_part = ldde.geo_cd_part
+
+        -- =====================================================================
+        -- LEFT JOIN: Delivery item details (item may not exist)
+        -- =====================================================================
+        LEFT JOIN ${landing_catalog}.${landing_schema}.landing_ndf_delivery_item_t AS ldi
+            ON ldsl.delivery_nbr = ldi.delivery_nbr
+            AND ldsl.delivery_item_nbr = ldi.delivery_item_nbr
+            AND ldsl.delivery_create_dt = ldi.delivery_create_dt
+            AND ldsl.physical_source_id = ldi.physical_source_id
+            AND ldsl.geo_cd_part = ldi.geo_cd_part
+
+        -- =====================================================================
+        -- LEFT JOIN: Delivery header information (header may not exist)
+        -- =====================================================================
+        LEFT JOIN ${landing_catalog}.${landing_schema}.landing_ndf_delivery_t AS ldh
+            ON ldsl.delivery_nbr = ldh.delivery_nbr
+            -- AND ldsl.delivery_create_dt = ldh.delivery_create_dt
+            AND ldsl.physical_source_id = ldh.physical_source_id
+            AND ldsl.geo_cd_part = ldh.geo_cd_part
+
+    WHERE
+        -- CDC filter: capture changes since last processed timestamp
+        (
+            ldsl.${landing_commit_tmst_col} >= '${last_processed_tmst}'
+            OR ldi.${landing_commit_tmst_col} >= '${last_processed_tmst}'
+            OR ldh.${landing_commit_tmst_col} >= '${last_processed_tmst}'
+        )
+)
+
+-- =============================================================================
+-- Final SELECT: Output all columns with deduplication
+-- =============================================================================
+SELECT
+    -- Primary Keys [PK]
+    inbound_delivery_header_number,                                             -- [PK]
+    inbound_delivery_item_number,                                               -- [PK]
+    inbound_delivery_schedule_line_number,                                      -- [PK]
+    physical_source_id,                                                         -- [PK]
+
+    -- Delivery Information
+    inbound_delivery_header_create_date,
+    actual_goods_movement_dt,
+    product_code,
+    size_code,
+    quality_code,
+    geo_cd_part,
+    receiving_location_code,
+    delivery_direction_cd,
+
+    -- Purchase Order Reference
+    purchase_order_header_number,
+    purchase_order_item_number,
+    purchase_order_item_variant_number,
+
+    -- Quantity Measures
+    inbound_delivery_size_base_quantity,
+    header_total_cartons,
+    inbound_delivery_size_gross_weight_kg,
+    inbound_delivery_size_net_weight_kg,
+    inbound_delivery_size_gross_volume,
+
+    -- Active Indicator
+    active_indicator,
+
+    -- CDC Timestamp
+    latest_processed_stage_tmst
+
+FROM (
+    SELECT
+        *,
+        -- =====================================================================
+        -- Deduplication: Keep only the latest record per primary key combination
+        -- Primary Keys: inbound_delivery_header_number, inbound_delivery_item_number,
+        --               inbound_delivery_schedule_line_number, physical_source_id
+        -- =====================================================================
+        ROW_NUMBER() OVER (
+            PARTITION BY
+                inbound_delivery_header_number,
+                inbound_delivery_item_number,
+                inbound_delivery_schedule_line_number,
+                physical_source_id,
+                geo_cd_part
+            ORDER BY
+                latest_processed_stage_tmst DESC
+        ) AS rn
+    FROM
+        delta_changes
+) ranked
+WHERE rn = 1
+
+B) INTEGRATED
+—————————
+
+/*
+================================================================================
+Integrated Table: integrated_delivery_item_t
+================================================================================
+Description:
+    This SQL integrates delivery item data from NDF (Nike Data Foundation) stage
+    tables with ARTA (Advanced Real-Time Analytics) stage tables to create a
+    consolidated view of delivery items with enriched shipment data.
+
+Source Tables:
+    NDF Stage:
+        - stage_ndf_delivery_item_t : NDF delivery item data (primary source)
+    ARTA Stage:
+        - stage_arta_delivery_item_t : ARTA delivery item data (enrichment)
+
+Join Logic:
+    The join between NDF and ARTA handles two different source systems:
+    - AFS (physical_source_id = 1):
+        Uses inbound_delivery_schedule_line_number for matching
+        inbound_delivery_item_number is set to 0
+        purchase_order_item_variant_number is set to 0
+    - S4 (physical_source_id = 77):
+        Uses inbound_delivery_item_number for matching
+        inbound_delivery_schedule_line_number is set to 0
+        purchase_order_item_variant_number is used for matching
+
+ARTA Deduplication:
+    ARTA delivery items are deduplicated using GROUP BY on delivery keys
+    (header, item, schedule_line, product, size, physical_source_id) with
+    MAX() aggregation on quantity fields to handle duplicate records.
+
+Active Indicator Filter:
+    Only active ARTA records (active_indicator = 1) are included in the
+    deduplication CTE to avoid obsolete or cancelled delivery data.
+
+CDC Strategy:
+    Captures changes based on stage_commit_tmst from both NDF and ARTA
+    stage tables since last processed timestamp.
+
+Output:
+    Deduplicated delivery items with NDF base data enriched with ARTA
+    shipment quantities and reference information.
+================================================================================
+*/
+
+-- =============================================================================
+-- CTE: Deduplicate ARTA Delivery Items
+-- Purpose: Aggregate duplicate ARTA records per delivery key
+-- =============================================================================
+WITH arta_delivery_deduped AS (
+    SELECT
+        inbound_delivery_header_number,
+        CAST(inbound_delivery_item_number AS INT) AS inbound_delivery_item_number,
+        CAST(inbound_delivery_schedule_line_number AS INT) AS inbound_delivery_schedule_line_number,
+        product_code,
+        size_code,
+        physical_source_id,
+        MAX(purchase_order_header_number) AS purchase_order_header_number,
+        MAX(CAST(purchase_order_item_number AS INT)) AS purchase_order_item_number,
+        MAX(CAST(purchase_order_item_variant_number AS INT)) AS purchase_order_item_variant_number,
+        MAX(delivery_shipped_quantity) AS delivery_shipped_quantity,
+        MAX(delivery_received_quantity) AS delivery_received_quantity,
+        MAX(delivery_reported_volume) AS delivery_reported_volume,
+        MAX(reported_delivery_header_gross_weight) AS reported_delivery_header_gross_weight,
+        MAX(reported_delivery_header_total_cartons) AS reported_delivery_header_total_cartons,
+        MAX(reported_delivery_item_shipped_quantity) AS reported_delivery_item_shipped_quantity,
+        MAX(import_code_number) AS import_code_number,
+        -- Use stable aliases to avoid ambiguous references when `${cdc_column}`
+        -- and `${stage_commit_tmst_col}` resolve to the same column name.
+        MAX(${cdc_column}) AS arta_cdc_tmst,
+        MAX(${stage_commit_tmst_col}) AS arta_stage_commit_tmst
+    FROM ${stage_catalog}.${ilm_arta_stage}.${stage_arta_table}
+    WHERE active_indicator = 1
+    GROUP BY
+        inbound_delivery_header_number,
+        CAST(inbound_delivery_item_number AS INT),
+        CAST(inbound_delivery_schedule_line_number AS INT),
+        product_code,
+        size_code,
+        physical_source_id
+        
+)
+
+SELECT DISTINCT
+    -- =========================================================================
+    -- Business Key Fields (from NDF)
+    -- =========================================================================
+    stage_ndf_del.inbound_delivery_header_number,
+    stage_ndf_del.inbound_delivery_item_number,
+    stage_ndf_del.inbound_delivery_schedule_line_number,
+    stage_ndf_del.inbound_delivery_header_create_date,
+    
+    -- =========================================================================
+    -- Delivery date event-actual goods movement date (from NDF)
+    -- =========================================================================
+    stage_ndf_del.actual_goods_movement_dt,
+
+    -- =========================================================================
+    -- Product Information (from NDF)
+    -- =========================================================================
+    stage_ndf_del.product_code,
+    stage_ndf_del.size_code,
+    stage_ndf_del.quality_code,
+    stage_ndf_del.geo_cd_part,
+    stage_ndf_del.delivery_direction_cd,
+
+    -- =========================================================================
+    -- Purchase Order Reference (from NDF)
+    -- =========================================================================
+    stage_ndf_del.purchase_order_header_number,
+    stage_ndf_del.purchase_order_item_number,
+    stage_ndf_del.purchase_order_item_variant_number,
+
+    -- =========================================================================
+    -- Location and Quantity Fields (from NDF)
+    -- =========================================================================
+    stage_ndf_del.receiving_location_code AS shipping_point_code,
+    CAST(stage_ndf_del.inbound_delivery_size_base_quantity AS DECIMAL(38, 0)) AS delivery_quantity,
+    CAST(stage_ndf_del.header_total_cartons AS DECIMAL(38, 0)) AS cartons_quantity,
+    CAST(stage_ndf_del.inbound_delivery_size_gross_weight_kg AS DECIMAL(18, 9)) AS delivery_gross_weight,
+    CAST(stage_ndf_del.inbound_delivery_size_net_weight_kg AS DECIMAL(18, 9)) AS delivery_net_weight,
+    CAST(stage_ndf_del.inbound_delivery_size_gross_volume AS DECIMAL(18, 9)) AS delivery_gross_volume,
+
+    -- =========================================================================
+    -- Status Fields (from NDF)
+    -- =========================================================================
+    stage_ndf_del.physical_source_id,
+    stage_ndf_del.active_indicator,
+
+    -- =========================================================================
+    -- ARTA Quantity Measures (from deduped CTE)
+    -- =========================================================================
+    stage_arta_del.delivery_reported_volume AS delivery_reported_volume_ar,
+    stage_arta_del.import_code_number,
+    CAST(stage_arta_del.delivery_shipped_quantity AS DECIMAL(38, 0)) AS delivery_total_shipped_quantity_ar,
+    CAST(stage_arta_del.delivery_received_quantity AS DECIMAL(38, 0)) AS delivery_total_received_quantity_ar,
+    CAST(stage_arta_del.reported_delivery_header_gross_weight AS DECIMAL(38, 2)) AS reported_delivery_header_gross_weight_ar,
+    CAST(stage_arta_del.reported_delivery_header_total_cartons AS DECIMAL(38, 0)) AS reported_delivery_header_total_cartons_ar,
+    CAST(stage_arta_del.reported_delivery_item_shipped_quantity AS DECIMAL(38, 0)) AS reported_delivery_item_shipped_quantity_ar,
+
+    -- =========================================================================
+    -- CDC Timestamps
+    -- =========================================================================
+    stage_ndf_del.${cdc_column} AS latest_stage_ndf_processed_tmst,
+    stage_arta_del.arta_cdc_tmst AS latest_stage_arta_processed_tmst,
+    LEAST(
+        MAX(stage_ndf_del.${stage_commit_tmst_col}),
+        MAX(stage_arta_del.arta_stage_commit_tmst)
+    ) AS latest_processed_integrated_tmst
+
+FROM ${stage_catalog}.${stage_schema}.${stage_ndf_table} AS stage_ndf_del
+
+    -- =========================================================================
+    -- LEFT JOIN: ARTA Delivery Item (deduped enrichment data)
+    -- Join handles both AFS (physical_source_id=1) and S4 (physical_source_id=77)
+    -- =========================================================================
+    LEFT JOIN arta_delivery_deduped AS stage_arta_del
+        ON stage_ndf_del.inbound_delivery_header_number = stage_arta_del.inbound_delivery_header_number
+        -- AFS uses schedule_line_number, S4 uses item_number
+        AND CASE
+                WHEN stage_ndf_del.physical_source_id <> 77 THEN 0
+                ELSE stage_ndf_del.inbound_delivery_item_number
+            END = stage_arta_del.inbound_delivery_item_number
+        AND CASE
+                WHEN stage_ndf_del.physical_source_id = 77 THEN 0
+                ELSE stage_ndf_del.inbound_delivery_schedule_line_number
+            END = stage_arta_del.inbound_delivery_schedule_line_number
+        AND stage_ndf_del.physical_source_id = stage_arta_del.physical_source_id
+        AND stage_ndf_del.product_code = stage_arta_del.product_code
+        AND stage_ndf_del.size_code = stage_arta_del.size_code
+        AND stage_ndf_del.purchase_order_header_number = stage_arta_del.purchase_order_header_number
+        AND stage_ndf_del.purchase_order_item_number = stage_arta_del.purchase_order_item_number
+        -- S4 uses variant_number, AFS does not
+        AND CASE
+                WHEN stage_ndf_del.physical_source_id <> 77 THEN 0
+                ELSE stage_ndf_del.purchase_order_item_variant_number
+            END = stage_arta_del.purchase_order_item_variant_number
+
+WHERE
+    -- CDC filter: capture changes since last processed timestamp
+    stage_ndf_del.${stage_commit_tmst_col} >= '${last_processed_tmst}'
+    OR stage_arta_del.arta_stage_commit_tmst >= '${last_processed_tmst}'
+
+GROUP BY ALL
+
+3. SRC
+A) CORE
+
+a.1) constants.py
+SRC_NDF_DELIVERY_OBJ = "delivery_ltst_harmonized_v"
+LAND_NDF_DELIVERY_TBL = "landing_ndf_delivery_t"
+SRC_NDF_DELIVERY_ITEM_OBJ = "delivery_item_ltst_harmonized_v"
+LAND_NDF_DELIVERY_ITEM_TBL = "landing_ndf_delivery_item_t"
+SRC_NDF_DELIVERY_SCHEDULE_LINE_OBJ = "delivery_schedule_line_ltst_harmonized_v"
+LAND_NDF_DELIVERY_SCHEDULE_LINE_TBL = "landing_ndf_delivery_schedule_line_t"
+SRC_NDF_DELIVERY_DATE_EVENT_OBJ = "delivery_date_event_ltst_harmonized_v"
+LAND_NDF_DELIVERY_DATE_EVENT_TBL = "landing_ndf_delivery_date_event_t"
+
+
+# Stage
+STG_NDF_DELIVERY_TBL = "stage_ndf_delivery_t"
+STAGE_NDF_DELIVERY_ITEM_TBL = "stage_ndf_delivery_item_t"
+# Integrated
+INTEGRATED_DELIVERY_OBJ = "integrated_delivery_t"
+INTEGRATED_DELIVERY_ITEM_TBL = "integrated_delivery_item_t"
+# Reference tables
+STAGE_ARTA_DELIVERY_ITEM_TBL = "stage_arta_delivery_item_t"
+
+B.2)task_base.py
+
+import json
+import logging
+import os
+import re
+import tempfile
+import uuid
+from typing import Optional
+
+import yaml
+from brickflow import BrickflowEnvVars
+from brickflow.context import ctx as brickflow_ctx
+from koheesio.context import Context
+from koheesio.logger import LoggingFactory
+
+from spark.python.src.core.utils import SPARK_PYTHON_PROJECT_ROOT
+
+log = logging.getLogger(__name__)
+
+
+class TasksBase:
+    _instance = None
+    _ctx: Context
+
+    def __new__(cls, config: Optional[dict] = None) -> object:
+        if not isinstance(cls._instance, cls):
+            if config is None:
+                config = {"init": True}
+            cls._instance = object.__new__(cls)
+            cls.set_ctx(config)
+        elif config is not None and config != cls.ctx().to_dict():
+            cls.set_ctx(config)
+
+        return cls._instance
+
+    @staticmethod
+    def log(name, loglevel: Optional[int] = None):
+        if loglevel is None:
+            jp_log_level_str = brickflow_ctx.get_parameter("jp_log_level", "INFO")
+            loglevel = getattr(logging, jp_log_level_str.upper(), logging.INFO)
+
+        # Get environment from brickflow context (controls stdout vs stderr in LoggingFactory)
+        env = getattr(brickflow_ctx, "env", "local")
+
+        # Enable brickflow framework log propagation to Databricks driver logs
+        brickflow_ctx.log.propagate = True
+
+        # Initialize LoggingFactory with proper env - it configures root logger with basicConfig
+        LoggingFactory(name="app", level=loglevel, env=env)
+
+        # Get logger inheriting from "app" parent logger
+        logger = LoggingFactory.get_logger(name, inherit_from_koheesio=True)
+        logger.setLevel(loglevel)
+        logger.propagate = True
+
+        return logger
+
+    @classmethod
+    def ctx(cls) -> Context:
+        if isinstance(cls._instance, cls):
+            return cls._ctx
+
+        return Context({})
+
+    @classmethod
+    def set_ctx(cls, config: dict) -> None:
+        if isinstance(cls._instance, cls) and config is not None:
+            ctx_from_config: Context = Context.from_dict(config)
+            # NOTE epic-dunk: Use the brickflow context to get the environment label and ephemeral params
+            project_params = str(
+                brickflow_ctx.get_parameter(BrickflowEnvVars.BRICKFLOW_PROJECT_PARAMS.value.lower())
+                or os.environ.get(BrickflowEnvVars.BRICKFLOW_PROJECT_PARAMS.value)
+            )
+            try:
+                pairs = project_params.split(",")
+                kv_dict = {pair.split("=")[0]: pair.split("=")[1] for pair in pairs}
+                env_config = kv_dict.get("environment-config")
+                ephemeral_schema_name = kv_dict.get("ephemeral_schema_name")
+            except (KeyError, IndexError):
+                env_config = ctx_from_config.get("env", "local")
+                ephemeral_schema_name = None
+                log.debug("No environment-config or ephemeral_schema_name found in project_params")
+
+            cls._ctx = ctx_from_config.merge(
+                cls._get_sparkpython_context(env_config, ephemeral_schema_name), recursive=True
+            )
+
+    @staticmethod
+    def _get_sparkpython_context(env_config: str, ephemeral_schema_name: str = None) -> Context:
+        log.debug(f"Getting sparkpython context for {env_config}")
+        env_config_path = SPARK_PYTHON_PROJECT_ROOT.joinpath("config").joinpath(f"{env_config}.yaml")
+
+        # Validate that the environment config file exists
+        if not env_config_path.exists():
+            raise FileNotFoundError(f"Environment config file not found: {env_config_path}")
+
+        # Use ephemeral YAML if schema provided, otherwise use original
+        if ephemeral_schema_name is not None:
+            env_yaml_path = TasksBase._create_ephemeral_yaml(env_config_path, env_config, ephemeral_schema_name)
+        else:
+            env_yaml_path = str(env_config_path)
+
+        # Load contexts (using modified YAML if created)
+        return Context.merge(
+            Context.from_yaml(str(SPARK_PYTHON_PROJECT_ROOT.joinpath("config").joinpath("common.yaml"))),
+            Context.from_yaml(env_yaml_path),
+            recursive=True,
+        )
+
+    @staticmethod
+    def _create_ephemeral_yaml(env_config_path, env_config: str, ephemeral_schema_name: str) -> str:
+        """Create a modified YAML file with ephemeral schema names and return the path."""
+        # Read original YAML
+        with open(env_config_path, "r", encoding="utf-8") as file:
+            env_config_content = yaml.safe_load(file)
+
+        log.debug(f"Modifying YAML with ephemeral_schema_name: {ephemeral_schema_name}")
+
+        # Replace ephemeral_environment_schema placeholder with actual schema value
+        json_str = json.dumps(env_config_content)
+        modified_json_str = re.sub(r"\{\{\s*ephemeral_schema_name\s*\}\}", ephemeral_schema_name, json_str)
+        modified_config_content = json.loads(modified_json_str)
+
+        # Write modified configuration to temporary file (only writable location on Databricks)
+        temp_dir = tempfile.gettempdir()
+        tmp_yaml_path = f"{temp_dir}/{env_config}_{uuid.uuid4().hex[:8]}.yaml"
+        with open(tmp_yaml_path, "w", encoding="utf-8") as file:
+            yaml.dump(modified_config_content, file)
+
+        log.debug(f"Modified YAML written to: {tmp_yaml_path}")
+        return tmp_yaml_path
+
+C.3)utils.py
+
+import json
+import logging
+import os
+import time
+from pathlib import Path
+
+from delta import configure_spark_with_delta_pip
+from pyspark.sql import SparkSession
+
+SPARK_PYTHON_PROJECT_ROOT = Path([i for i in Path(__file__).parents if i.as_uri().endswith("src")][0]).parent
+
+LOCAL_SPARK_WAREHOUSE_PATH = SPARK_PYTHON_PROJECT_ROOT.joinpath(".local").joinpath("spark-warehouse")
+LOCAL_CHECKPOINT_PATH = SPARK_PYTHON_PROJECT_ROOT.joinpath(".local").joinpath("checkpoint")
+
+
+def read_json(file_path: str):
+    with open(file_path, encoding="utf-8") as file:
+        return json.load(file)
+
+
+def get_local_spark_session() -> SparkSession:
+    # Change Python timezone to UTC
+    os.environ["TZ"] = "UTC"
+    time.tzset()
+
+    # Set logging level to ERROR for py4j
+    logging.getLogger("py4j").setLevel(logging.ERROR)
+
+    builder = (
+        SparkSession.builder.appName("local_app")
+        .master("local[*]")
+        .config("spark.sql.session.timeZone", "UTC")
+        .config("spark.sql.warehouse.dir", str(LOCAL_SPARK_WAREHOUSE_PATH))
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+        .config(
+            "spark.sql.catalog.spark_catalog",
+            "org.apache.spark.sql.delta.catalog.DeltaCatalog",
+        )
+    )
+
+    return configure_spark_with_delta_pip(
+        builder,
+        # NOTE epic-dunk: The Scala 2.13 version of spark-avro for Spark 3.5.x has a bug, hence we're hard-coding Scala '2_12', even when using dbr16.4.x-scala2.13'
+        # fmt: off
+        extra_packages=["org.apache.spark:spark-avro_2.12:3.5.3"],
+    ).getOrCreate()
+
+B) TASKS
+
+B.1) LANDING
+
+from emea_inbound.input_model.delta_clone import DedupCondition, ReplaceValues, SortOrder, UnityCatalogCloneModel
+from emea_inbound.task.delta_uc_clone_task import DeltaUCCloneTask
+from emea_inbound.utils.base import NoDataException
+
+from spark.python.src.core.constants import (
+    LAND_NDF_DELIVERY_ITEM_TBL,
+    LAND_NDF_DELIVERY_SCHEDULE_LINE_TBL,
+    LAND_NDF_DELIVERY_TBL,
+    LAND_NDF_DELIVERY_DATE_EVENT_TBL,
+    SRC_NDF_DELIVERY_ITEM_OBJ,
+    SRC_NDF_DELIVERY_OBJ,
+    SRC_NDF_DELIVERY_SCHEDULE_LINE_OBJ,
+    SRC_NDF_DELIVERY_DATE_EVENT_OBJ,
+)
+from spark.python.src.core.tasks_base import TasksBase
+from spark.python.src.tasks.utils import get_cdc_column, get_filter_condition, get_lookback_days
+
+log = TasksBase.log(__name__)
+
+_replace_values = ReplaceValues(current_values=["*UNK*", "*unk*"], expected_value=None)
+_source_catalog_path = "source.dbx.fulfillment"
+_target_catalog_path = "landing"
+_no_data_exception = "No data to load"
+
+
+def load_ndf_landing_delivery_task() -> None:
+    try:
+        _days_lookback = get_lookback_days()
+        _cdc_column = get_cdc_column(_source_catalog_path)
+        _order_by_columns = {_cdc_column: SortOrder.DESC}
+        _deduplicate_conditions = DedupCondition(
+            partition_by_columns=["delivery_nbr", "delivery_create_dt","physical_source_id","geo_cd_part"],
+            order_by_columns=_order_by_columns,
+        )
+        _filter_conditions = get_filter_condition(_source_catalog_path, SRC_NDF_DELIVERY_OBJ, _days_lookback)
+        params = UnityCatalogCloneModel(
+            source=SRC_NDF_DELIVERY_OBJ,
+            target=LAND_NDF_DELIVERY_TBL,
+            source_catalog_path=_source_catalog_path,
+            target_catalog_path=_target_catalog_path,
+            cdc_column=_cdc_column,
+            deduplicate_conditions=_deduplicate_conditions,
+            additional_conditions=_filter_conditions,
+            primary_keys=["delivery_nbr", "delivery_create_dt","physical_source_id","geo_cd_part"],
+            days_lookback=_days_lookback,
+            replace_values=_replace_values,
+            delete_clone_table=TasksBase.ctx().get("landing.drop"),
+            clean_clone_table=TasksBase.ctx().get("landing.truncate"),
+        )
+
+        task = DeltaUCCloneTask(params, koheesio_ctx=TasksBase.ctx())
+        task.run()
+    except NoDataException as e:
+        log.info(f"load_ndf_landing_delivery_task {_no_data_exception}: {e}")
+
+
+def load_ndf_landing_delivery_item_task() -> None:
+    try:
+        _days_lookback = get_lookback_days()
+        _cdc_column = get_cdc_column(_source_catalog_path)
+        _order_by_columns = {_cdc_column: SortOrder.DESC}
+        _deduplicate_conditions = DedupCondition(
+            partition_by_columns=["delivery_nbr", "delivery_create_dt", "delivery_item_nbr","physical_source_id","geo_cd_part"],
+            order_by_columns=_order_by_columns,
+        )
+        _filter_conditions = get_filter_condition(_source_catalog_path, SRC_NDF_DELIVERY_ITEM_OBJ, _days_lookback)
+        params = UnityCatalogCloneModel(
+            source=SRC_NDF_DELIVERY_ITEM_OBJ,
+            target=LAND_NDF_DELIVERY_ITEM_TBL,
+            source_catalog_path=_source_catalog_path,
+            target_catalog_path=_target_catalog_path,
+            cdc_column=_cdc_column,
+            deduplicate_conditions=_deduplicate_conditions,
+            additional_conditions=_filter_conditions,
+            primary_keys=["delivery_nbr", "delivery_create_dt", "delivery_item_nbr","physical_source_id","geo_cd_part"],
+            days_lookback=_days_lookback,
+            replace_values=_replace_values,
+            delete_clone_table=TasksBase.ctx().get("landing.drop"),
+            clean_clone_table=TasksBase.ctx().get("landing.truncate"),
+        )
+
+        task = DeltaUCCloneTask(params, koheesio_ctx=TasksBase.ctx())
+        task.run()
+    except NoDataException as e:
+        log.info(f"load_ndf_landing_delivery_item_task {_no_data_exception}: {e}")
+
+
+def load_ndf_landing_delivery_schedule_line_task() -> None:
+    try:
+        _days_lookback = get_lookback_days()
+        _cdc_column = get_cdc_column(_source_catalog_path)
+        _order_by_columns = {_cdc_column: SortOrder.DESC}
+        _deduplicate_conditions = DedupCondition(
+            partition_by_columns=["delivery_nbr", "delivery_create_dt", "delivery_schedule_line_nbr","physical_source_id","geo_cd_part"],
+            order_by_columns=_order_by_columns,
+        )
+        _filter_conditions = get_filter_condition(
+            _source_catalog_path, SRC_NDF_DELIVERY_SCHEDULE_LINE_OBJ, _days_lookback
+        )
+        params = UnityCatalogCloneModel(
+            source=SRC_NDF_DELIVERY_SCHEDULE_LINE_OBJ,
+            target=LAND_NDF_DELIVERY_SCHEDULE_LINE_TBL,
+            source_catalog_path=_source_catalog_path,
+            target_catalog_path=_target_catalog_path,
+            cdc_column=_cdc_column,
+            deduplicate_conditions=_deduplicate_conditions,
+            additional_conditions=_filter_conditions,
+            primary_keys=["delivery_nbr", "delivery_create_dt", "delivery_schedule_line_nbr","physical_source_id","geo_cd_part"],
+            days_lookback=_days_lookback,
+            replace_values=_replace_values,
+            delete_clone_table=TasksBase.ctx().get("landing.drop"),
+            clean_clone_table=TasksBase.ctx().get("landing.truncate"),
+        )
+
+        task = DeltaUCCloneTask(params, koheesio_ctx=TasksBase.ctx())
+        task.run()
+    except NoDataException as e:
+        log.info(f"load_ndf_landing_delivery_schedule_line_task {_no_data_exception}: {e}")
+
+def load_ndf_landing_delivery_date_event_task() -> None:
+    try:
+        _days_lookback = get_lookback_days()
+        _cdc_column = get_cdc_column(_source_catalog_path)
+        _order_by_columns = {_cdc_column: SortOrder.DESC}
+        _deduplicate_conditions = DedupCondition(
+            partition_by_columns=["delivery_nbr", "delivery_create_dt", "physical_source_id", "geo_cd_part"],
+            order_by_columns=_order_by_columns,
+        )
+        _filter_conditions = get_filter_condition(
+            _source_catalog_path, SRC_NDF_DELIVERY_DATE_EVENT_OBJ, _days_lookback
+        )
+        params = UnityCatalogCloneModel(
+            source=SRC_NDF_DELIVERY_DATE_EVENT_OBJ,
+            target=LAND_NDF_DELIVERY_DATE_EVENT_TBL,
+            source_catalog_path=_source_catalog_path,
+            target_catalog_path=_target_catalog_path,
+            cdc_column=_cdc_column,
+            deduplicate_conditions=_deduplicate_conditions,
+            additional_conditions=_filter_conditions,
+            primary_keys=["delivery_nbr", "delivery_create_dt", "physical_source_id", "geo_cd_part"],
+            days_lookback=_days_lookback,
+            replace_values=_replace_values,
+            delete_clone_table=TasksBase.ctx().get("landing.drop"),
+            clean_clone_table=TasksBase.ctx().get("landing.truncate"),
+        )
+
+        task = DeltaUCCloneTask(params, koheesio_ctx=TasksBase.ctx())
+        task.run()
+    except NoDataException as e:
+        log.info(f"load_ndf_landing_delivery_date_event_task {_no_data_exception}: {e}")
+
+B.2) STAGE
+
+from emea_inbound.input_model.delta_clone import SqlEtlModel
+from emea_inbound.task.sql_etl_task import SqlTask
+from emea_inbound.utils.base import NoDataException
+from emea_inbound.utils.delta import DeltaOffset
+from koheesio.spark.delta import DeltaTableStep
+
+from spark.python.src.core.constants import (
+    LAND_NDF_DELIVERY_ITEM_TBL,
+    LAND_NDF_DELIVERY_SCHEDULE_LINE_TBL,
+    LAND_NDF_DELIVERY_TBL,
+    LAND_NDF_DELIVERY_DATE_EVENT_TBL,
+    STAGE_NDF_DELIVERY_ITEM_TBL,
+)
+from spark.python.src.core.tasks_base import TasksBase
+from spark.python.src.core.utils import SPARK_PYTHON_PROJECT_ROOT
+from spark.python.src.tasks.utils import get_cdc_column
+
+log = TasksBase.log(__name__)
+
+_no_data_exception = "No data to load"
+_landing_catalog_path = "landing"
+_stage_catalog_path = "stage"
+_target_commit_tmst_col = "latest_processed_stage_tmst"
+
+
+def load_ndf_delivery_item_task():
+    log.info("Starting load_ndf_delivery_item_task")
+    try:
+        sql_path = "sql/stage/delivery_item.sql"
+        target = STAGE_NDF_DELIVERY_ITEM_TBL
+        sql_params = {}
+        koheesio_ctx = TasksBase.ctx()
+        _landing_commit_tmst_col = get_cdc_column(_landing_catalog_path)
+        if not koheesio_ctx.contains(f"{_landing_catalog_path}.catalog"):
+            raise Exception(f"Catalog path {_landing_catalog_path} not found in context")
+        if not koheesio_ctx.contains(f"{_stage_catalog_path}.catalog"):
+            raise Exception(f"Catalog path {_stage_catalog_path} not found in context")
+
+        sql_params["landing_catalog"] = koheesio_ctx.get(f"{_landing_catalog_path}.catalog")
+        sql_params["landing_schema"] = koheesio_ctx.get(f"{_landing_catalog_path}.schema")
+        sql_params["po_header_logic"] = koheesio_ctx.get(f"{_stage_catalog_path}.custom_sql.po_header_logic")
+        sql_params["landing_commit_tmst_col"] = _landing_commit_tmst_col
+        sql_params["last_processed_tmst"] = str(
+            DeltaOffset().get_offset_with_fallback_to_multiple_sources(
+                target_table=DeltaTableStep(
+                    catalog=sql_params["landing_catalog"],
+                    database=sql_params["landing_schema"],
+                    table=target,
+                ),
+                target_commit_tmst_col=_target_commit_tmst_col,
+                source_tables_commit_tmst=[
+                    (
+                        DeltaTableStep(
+                            catalog=sql_params["landing_catalog"],
+                            database=sql_params["landing_schema"],
+                            table=LAND_NDF_DELIVERY_SCHEDULE_LINE_TBL,
+                        ),
+                        _landing_commit_tmst_col,
+                    ),
+                    (
+                        DeltaTableStep(
+                            catalog=sql_params["landing_catalog"],
+                            database=sql_params["landing_schema"],
+                            table=LAND_NDF_DELIVERY_ITEM_TBL,
+                        ),
+                        _landing_commit_tmst_col,
+                    ),
+                    (
+                        DeltaTableStep(
+                            catalog=sql_params["landing_catalog"],
+                            database=sql_params["landing_schema"],
+                            table=LAND_NDF_DELIVERY_TBL,
+                        ),
+                        _landing_commit_tmst_col,
+                    ),
+                ],
+            )
+        )
+
+        _param = SqlEtlModel(
+            sql_path=str(SPARK_PYTHON_PROJECT_ROOT / sql_path),
+            target_table_name=target,
+            target_path=_stage_catalog_path,
+            query_params=sql_params,
+            primary_keys=[
+                "inbound_delivery_header_number",
+                "inbound_delivery_item_number",
+                "inbound_delivery_schedule_line_number",
+                "physical_source_id",
+                "geo_cd_part",
+            ],
+        )
+
+        task = SqlTask(koheesio_ctx=koheesio_ctx, sql_etl_param=_param)
+        task.run()
+
+    except NoDataException as e:
+        log.info(f"{_no_data_exception}: {e}")
+
+B.3) INTEGRATED
+
+from emea_inbound.input_model.delta_clone import SqlEtlModel
+from emea_inbound.task.sql_etl_task import SqlTask
+from emea_inbound.utils.base import NoDataException
+from emea_inbound.utils.delta import DeltaOffset
+from koheesio.spark.delta import DeltaTableStep
+
+from spark.python.src.core.constants import (
+    INTEGRATED_DELIVERY_ITEM_TBL,
+    INTEGRATED_DELIVERY_OBJ,
+    STAGE_ARTA_DELIVERY_ITEM_TBL,
+    STAGE_NDF_DELIVERY_ITEM_TBL,
+)
+from spark.python.src.core.tasks_base import TasksBase
+from spark.python.src.core.utils import SPARK_PYTHON_PROJECT_ROOT
+
+log = TasksBase.log(__name__)
+
+_no_data_exception = "No data to load"
+_stage_catalog_path = "stage"
+_integrated_path = "integrated"
+_cdc_column = "latest_processed_stage_tmst"
+_target_commit_tmst_col = "latest_processed_integrated_tmst"
+
+
+def _get_reference_schema(integrated_path: str, sql_params: dict):
+    # Check if reference schema is present in the context
+    # and add it to the sql_params if it exists
+    koheesio_ctx = TasksBase.ctx()
+    if koheesio_ctx.contains(f"{integrated_path}.reference_schema"):
+        reference_schemas = koheesio_ctx.to_dict()[_integrated_path]["reference_schema"]
+        for key, value in reference_schemas.items():
+            sql_params[key] = value
+    return sql_params
+
+def load_integrated_delivery():
+    log.info("Starting load_integrated_delivery")
+    try:
+        sql_path = "sql/integrated/integrated_delivery_t.sql"
+        target = INTEGRATED_DELIVERY_OBJ
+        sql_params = {}
+        koheesio_ctx = TasksBase.ctx()
+        target_catalog_path = "integrated"
+        if not koheesio_ctx.contains(f"{target_catalog_path}.catalog"):
+            raise Exception(f"Catalog path {target_catalog_path} not found in context")
+
+        landing_catalog_path = "landing"
+        stage_catalog_path = "stage"
+        integrated_path = "integrated"
+        sql_params["stage_catalog"] = koheesio_ctx.get(f"{stage_catalog_path}.catalog")
+        sql_params["landing_catalog"] = koheesio_ctx.get(f"{landing_catalog_path}.catalog")
+        sql_params["stage_schema"] = koheesio_ctx.get(f"{stage_catalog_path}.schema")
+
+        if koheesio_ctx.contains(f"{integrated_path}.reference_schema"):
+            reference_schemas = koheesio_ctx.to_dict()[integrated_path]["reference_schema"]
+            for key, value in reference_schemas.items():
+                sql_params[key] = value
+
+        snowflake_catalog_path = "integrated.snowflake"
+
+        _param = SqlEtlModel(
+            sql_path=str(SPARK_PYTHON_PROJECT_ROOT / sql_path),
+            target_table_name=target,
+            target_path=target_catalog_path,
+            query_params=sql_params,
+            overwrite=True,
+            sf_sync_config=snowflake_catalog_path,
+        )
+
+        task = SqlTask(koheesio_ctx=koheesio_ctx, sql_etl_param=_param)
+        task.run()
+
+    except NoDataException:
+        log.info("No data to load")
+
+
+def load_integrated_delivery_item():
+    log.info("Starting load_integrated_delivery_item")
+    try:
+        sql_path = "sql/integrated/delivery_item.sql"
+        target = INTEGRATED_DELIVERY_ITEM_TBL
+        stage_ndf_table = STAGE_NDF_DELIVERY_ITEM_TBL
+        stage_arta_table = STAGE_ARTA_DELIVERY_ITEM_TBL
+        _stage_commit_tmst_col = "latest_processed_stage_tmst"
+        sql_params = {}
+        koheesio_ctx = TasksBase.ctx()
+        if not koheesio_ctx.contains(f"{_integrated_path}.catalog"):
+            raise Exception(f"Catalog path {_integrated_path} not found in context")
+
+        sql_params["stage_catalog"] = koheesio_ctx.get(f"{_stage_catalog_path}.catalog")
+        sql_params["stage_schema"] = koheesio_ctx.get(f"{_stage_catalog_path}.schema")
+        sql_params["stage_ndf_table"] = stage_ndf_table
+        sql_params["stage_arta_table"] = stage_arta_table
+        sql_params["deduplicate_columns"] = (
+            "inbound_delivery_header_number,inbound_delivery_item_number,inbound_delivery_schedule_line_number,physical_source_id,geo_cd_part"
+        )
+        sql_params["cdc_column"] = _cdc_column
+        sql_params["stage_commit_tmst_col"] = _stage_commit_tmst_col
+        sql_params = _get_reference_schema(_integrated_path, sql_params)
+        sql_params["last_processed_tmst"] = str(
+            DeltaOffset().get_offset_with_fallback_to_multiple_sources(
+                target_table=DeltaTableStep(
+                    catalog=sql_params["stage_catalog"],
+                    database=sql_params["stage_schema"],
+                    table=target,
+                ),
+                target_commit_tmst_col=_target_commit_tmst_col,
+                source_tables_commit_tmst=[
+                    (
+                        DeltaTableStep(
+                            catalog=sql_params["stage_catalog"],
+                            database=sql_params["stage_schema"],
+                            table=sql_params["stage_ndf_table"],
+                        ),
+                        _stage_commit_tmst_col,
+                    ),
+                    (
+                        DeltaTableStep(
+                            catalog=sql_params["stage_catalog"],
+                            database=sql_params["ilm_arta_stage"],
+                            table=sql_params["stage_arta_table"],
+                        ),
+                        _stage_commit_tmst_col,
+                    ),
+                ],
+            )
+        )
+        sql_params = _get_reference_schema(_integrated_path, sql_params)
+        snowflake_catalog_path = f"{_integrated_path}.snowflake"
+        _param = SqlEtlModel(
+            sql_path=str(SPARK_PYTHON_PROJECT_ROOT / sql_path),
+            target_table_name=target,
+            target_path=_integrated_path,
+            query_params=sql_params,
+            primary_keys=[
+                "inbound_delivery_header_number",
+                "inbound_delivery_item_number",
+                "inbound_delivery_schedule_line_number",
+                "physical_source_id",
+                "geo_cd_part"
+            ],
+            sf_sync_config=snowflake_catalog_path,
+        )
+
+        task = SqlTask(koheesio_ctx=koheesio_ctx, sql_etl_param=_param)
+        task.run()
+    except NoDataException as e:
+        log.info(f"{_no_data_exception}: {e}")
+
+
+
+B.4)UTILS.PY
+
+from spark.python.src.core.tasks_base import TasksBase
+
+log = TasksBase.log(__name__)
+
+
+def get_lookback_days():
+    if TasksBase.ctx().get("env", "local") == "prod":
+        return 365 * 8
+    elif TasksBase.ctx().contains("landing.lookback_days"):
+        return TasksBase.ctx().get("landing.lookback_days")
+    else:
+        return 730
+
+
+def get_cdc_column(source_catalog_path) -> str:
+    cdc_path = f"{source_catalog_path}.cdc_column"
+    log.debug(f"get_cdc_column cdc_path: {cdc_path}")
+    if TasksBase.ctx().contains(cdc_path):
+        log.debug(f"get_cdc_column cdc_path: {cdc_path} exists")
+        _cdc_column = TasksBase.ctx().get(cdc_path)
+    else:
+        _cdc_column = "etl_tmst_utc"
+    log.info(f"get_cdc_column cdc_column: {_cdc_column}")
+    return _cdc_column
+
+
+def get_filter_condition(source_catalog_path: str, table_name: str, days_lookback: int) -> str:
+    filter_condition = (
+        f"hdrcrtyrmodt_part>=DATEADD(DAY,{(days_lookback * -1)},CURRENT_DATE)"
+    )
+    log.info(f"get_filter_condition filter_condition: {filter_condition}")
+    return filter_condition
+
+
+

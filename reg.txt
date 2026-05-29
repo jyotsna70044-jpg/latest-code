@@ -1,0 +1,148 @@
+reg_exp
+———————
+I/p-> 9911188888
+\d{10}
+
+I/p: (999)-333-777
+\(\d{3}\)-\d{3}-\d{4}
+
+I/p: 9911188888 or (999)-333-777
+\(\d{3}\)-\d{3}-\d{4} | \d{10}
+
+text=‘’’
+I have  9911188888 and (999)-333-777 contact
+‘’’
+pattern=\(\d{3}\)-\d{3}-\d{4} | \d{10}
+matches=re.findall(pattern,text)
+dispaly(matches)
+Output: [‘9911188888’ , ’(999)-333-777’]
+
+I/p-> Asjl;gsh-
+[^;-]
+O/p-> A
+s
+j
+l
+g
+s
+h
+
+I/p-> Asjl;gsh-
+[^;-]+
+O/p-> Asjlgsh
+
+I/p: Note \d - [^\n]*
+O/p: Note 1 - Overview
+
+I/p: Note \d - ([^\n]*)
+Note 2 - Summary of Significant Accounting Policies
+
+
+I/p: 
+pattern=‘Note \d - ([^\n]*)’
+Re.findall(pattern, text)
+
+O/p: [‘Overview’ , ‘Summary of Significant Accounting Policies’]
+
+I/p:
+Gross FY2021 Q1 and another year is FY2020 Q4 and also if quarter 5 there it will ignore that like FY2020 Q5 and that’s all.
+
+FY\d{4} Q[1234]
+
+O/p:
+FY2021 Q1 
+FY2020 Q4
+
+Or
+
+Pattern = FY\d{4} Q[1-4]
+matches=re.findall(pattern,text)
+display(matches)
+
+O/p: 
+[‘FY2021 Q1 ’ , ‘FY2020 Q4’]
+
+
+Or 
+I/p:
+Gross FY2021 Q1 and another year is fy2020 Q4 and also if quarter 5 there it will ignore that like FY2020 Q5 and that’s all.
+
+Pattern = FY\d{4} Q[1-4]
+matches=re.findall(pattern,text,flags=re.IGNORECASE)
+display(matches)
+
+O/p: 
+[‘FY2021 Q1 ’ , ‘fy2020 Q4’]
+
+I/p:
+Gross FY2021 Q1 and another year is fy2020 Q4 and also if quarter 5 there it will ignore that like FY2020 Q5 and that’s all.
+
+Pattern = FY(\d{4} Q[1-4])
+matches=re.findall(pattern,text,flags=re.IGNORECASE)
+display(matches)
+
+O/p: 
+[‘2021 Q1 ’ , ‘2020 Q4’]
+
+
+I/p:
+Gross FY2021 Q1 and another $3 year is fy2020 Q4 and $4.85 also if quarter 5 there it will ignore that like FY2020 Q5 and that’s all.
+
+\$[\d\.]+
+O/p: 
+$4.85
+$3
+I/p:
+
+Gross FY2021 Q1 and another $3 year is fy2020 Q4 and $4.85 also if quarter 5 there it will ignore that like FY2020 Q5 and that’s all.
+
+Pattern = ‘\$([\d\.]+)’
+matches=re.findall(pattern,text)
+display(matches)
+
+O/p: 
+[‘4.85 ’ , ‘3’]
+
+
+I/p:
+Gross FY2021 Q1 and another $3 year is fy2020 Q4 and $4.85 also if quarter 5 there it will ignore that like FY2020 Q5 and that’s all.
+
+Pattern = ‘FY(\d{4} Q[1-4])[^\$]+\$([0-9\.]+)’
+matches=re.findall(pattern,text)
+display(matches)
+
+O/p: 
+[(‘2021 Q1’ , ‘4.85 ’) , (‘2020 Q4 ’ , ‘3’)]
+
+
+python -m venv .per1
+source .per1/bin/activate
+deactivate
+
+——————————————————
+
+Modernization Plan Overview
+
+The modernization effort involves migrating the ILM data processing to a new architecture referred to as "Sole." The new design uses a bronze-silver-gold layered approach common in data lake architectures:
+* Bronze Layer: Raw flattened data from S3 with minimal cleansing.
+* Silver Layer: Processed data with merge updates and transformations.
+* Gold Layer: Aggregated data used for dashboards and reporting.
+Currently, only the bronze layer is implemented and tested in development branches; nothing is yet in production  .
+The modernization uses Databricks Autoloader for incremental data ingestion, leveraging checkpointing to automatically detect and process new files without manual filtering by timestamp. This approach reduces manual coding and aligns with recommendations from solution architects  .
+
+Data Schema and Archival
+
+The team documented schema changes that occurred on March 13, 2021, requiring separate handling of files before and after this date using different schemas. Both datasets are unified into single raw tables to maintain a complete historic record. The historic data load includes data back to October 2, 2018, based on business user requirements to access 4-5 years of historical data   .
+
+Custom Utilities and Data Formats
+
+Due to the unique file format of Amber Road data (CSV files with Ctrl-A delimiters), the team developed custom utilities for ingestion rather than using common utilities. This approach simplifies handling the specific parsing and file structure requirements  .
+For SAP data, which involves JSON and XML formats, custom operators have also been developed for flattening and processing .
+
+Data Validation
+
+Data validation has been performed internally using a tool called Data Mirror, which does row-to-row comparison between the existing Snowflake tables and the newly ingested data in Databricks. Validation results showed 99.9% accuracy in the bronze layer, providing confidence in the modernization efforts  .
+
+Modernisation and Migration Efforts
+
+The team is working on modernising the AR data pipelines by reducing the number of tables from 34 to 20 and migrating workflows from Snowflake to Databricks (Sol DataFlex environment). This migration has been completed in development and testing but awaits production deployment. The modernisation includes enhancements to SQL logic and plans to implement data quality rules using tools like Spark Expectations, which are currently absent in the legacy system  .

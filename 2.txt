@@ -1,0 +1,598 @@
+2
+
+Truncate table
+
+%sql
+TRUNCATE TABLE `development`.`dev_ilm`.`landing_ndf_delivery_date_event_t`;
+
+Minimum timestamp
+%sql
+select min(etl_tmst_utc) from development.dev_ilm.landing_ndf_delivery_date_event_t;
+
+DDL Creation
+
+%sql
+CREATE OR REPLACE TABLE development.dev_ilm.landing_ndf_delivery_t (
+delivery_uuid STRING,
+geo_cd_part STRING,
+hdrcrtyrmodt_part DATE,
+delivery_block_reason_cd STRING,
+delivery_type_cd STRING,
+shipping_condition_cd STRING,
+delivery_create_dt DATE,
+delivery_nbr STRING,
+super_geo_cd STRING,
+bol_nbr STRING,
+customer_group_cd STRING,
+additional_customer_group_1_cd STRING,
+additional_customer_group_2_cd STRING,
+additional_customer_group_3_cd STRING,
+delivery_direction_cd STRING,
+delivery_priority_nbr INT,
+export_cd STRING,
+external_delivery_nbr STRING,
+idp_ind STRING,
+means_of_transport_id STRING,
+means_of_transport_type_cd STRING,
+node_cd STRING,
+original_delivery_note_nbr STRING,
+picking_confirmation_status_cd STRING,
+receiving_location_cd STRING,
+route_cd STRING,
+sales_organization_cd STRING,
+ship_to_customer_nbr STRING,
+shipping_location_cd STRING,
+sold_to_customer_nbr STRING,
+transportation_group_cd STRING,
+vendor_nbr STRING,
+carton_qty DECIMAL(20,5),
+transaction_delete_ind STRING,
+etl_tmst_utc TIMESTAMP,
+record_created_tmst_utc TIMESTAMP,
+record_updated_tmst_utc TIMESTAMP,
+physical_source_cd STRING,
+physical_source_id INT,
+source_egress_reference_nbr STRING,
+created_by_user_id STRING,
+updated_by_user_id STRING,
+meta_load_tmst TIMESTAMP)
+USING delta
+CLUSTER BY (geo_cd_part,delivery_nbr,delivery_create_dt,physical_source_id)
+TBLPROPERTIES (
+'delta.checkpointPolicy' = 'v2',
+'delta.columnMapping.mode' = 'name',
+'delta.dataSkippingStatsColumns' = 'geo_cd_part,delivery_nbr,delivery_create_dt,delivery_direction_cd,etl_tmst_utc,physical_source_id',
+'delta.enableChangeDataFeed' = 'true',
+'delta.enableDeletionVectors' = 'true',
+'delta.enableRowTracking' = 'true',
+'delta.parquet.compression.codec' = 'zstd')
+
+
+How to see table DDL
+
+%sql
+-- show create table non_published_domain.ilm.raw_mdi_note
+
+
+Create view
+
+%sql
+CREATE OR REPLACE VIEW development.qa_ilm.integrated_delivery_item_t AS
+SELECT DISTINCT
+inbound_delivery_header_number,
+inbound_delivery_item_number,
+inbound_delivery_schedule_line_number,
+inbound_delivery_header_create_date,
+product_code,
+size_code,
+quality_code,
+geo_cd_part,
+purchase_order_header_number,
+purchase_order_item_number,
+purchase_order_item_variant_number,
+shipping_point_code,
+delivery_quantity,
+cartons_quantity,
+delivery_gross_weight,
+delivery_net_weight,
+delivery_gross_volume,
+physical_source_id,
+active_indicator,
+delivery_reported_volume_ar,
+import_code_number,
+delivery_total_shipped_quantity_ar,
+delivery_total_received_quantity_ar,
+reported_delivery_header_gross_weight_ar,
+reported_delivery_header_total_cartons_ar,
+reported_delivery_item_shipped_quantity_ar,
+latest_stage_ndf_processed_tmst,
+latest_stage_arta_processed_tmst,
+latest_processed_integrated_tmst
+FROM development.qa_ilm.integrated_delivery_item_t
+WHERE geo_cd_part = 'EU';
+
+
+Group by use and constant column addition
+
+%sql
+select geo_cd_part, 'landing_ndf_delivery_t' as table_name, count(*) as total_recs
+from development.dev_ilm.landing_ndf_delivery_t
+group by geo_cd_part
+order by total_recs desc;
+
+
+Copy table schema from prod to new table
+
+%sql
+CREATE TABLE development.dev_ilm.stage_ndf_delivery_item_t
+LIKE non_published_analytics.emea_inbound_fulfillment_derived.stage_ndf_delivery_item_t;
+
+
+Add new column to table
+
+%sql
+ALTER TABLE development.dev_ilm.stage_ndf_delivery_item_t
+ADD COLUMNS (
+geo_cd_part STRING
+);
+
+
+Copy all tables from prod to new cataloging schema
+# copy all table from source to target
+def copy_schema(source_catalog,source_schema,target_catalog,target_schema):
+
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_catalog}.{target_schema}")
+tables = spark.sql(f"SHOW TABLES IN {source_catalog}.{source_schema}").collect()
+
+for table in tables:
+table_name = table.tableName
+src = f"{source_catalog}.{source_schema}.{table_name}"
+tgt = f"{target_catalog}.{target_schema}.{table_name}"
+print(f"Cloning structure: {src} -> {tgt}")
+spark.sql(f"CREATE TABLE IF NOT EXISTS {tgt} LIKE {src}")
+
+
+source_catalog = "non_published_analytics"
+source_schema = "emea_inbound_fulfillment_derived"
+target_catalog = "development"
+target_schema = "dev_ilm"
+# copy_schema(source_catalog,source_schema,target_catalog,target_schema)
+
+
+Union all use
+
+%sql
+select geo_cd_part, 'landing_ndf_delivery_schedule_line_t' as table_name, count(*) as total_recs from development.qa_ilm.landing_ndf_delivery_schedule_line_t where hdrcrtyrmodt_part >= date_format(date_add(current_date(), -730), 'yyyy-MM') group by geo_cd_part
+union all
+select geo_cd_part, 'landing_ndf_delivery_item_t' as table_name, count(*) as total_recs from development.qa_ilm.landing_ndf_delivery_item_t where hdrcrtyrmodt_part >= date_format(date_add(current_date(), -730), 'yyyy-MM') group by geo_cd_part
+union all
+select geo_cd_part, 'landing_ndf_delivery_t' as table_name, count(*) as total_recs from development.qa_ilm.landing_ndf_delivery_t where hdrcrtyrmodt_part >= date_format(date_add(current_date(), -730), 'yyyy-MM') group by geo_cd_part;
+
+
+
+Use of groupie and where
+
+%sql
+select ldsl.geo_cd_part, 'landing_ndf_delivery_schedule_line_t' as table_name, count(*) as total_recs
+from development.qa_ilm.landing_ndf_delivery_schedule_line_t as ldsl
+-- WHERE ldsl.etl_tmst_utc >= TIMESTAMP '2024-03-22 04:39:35.489'
+WHERE ldsl.etl_tmst_utc >= TIMESTAMP '2021-04-07 15:09:07.040'
+group by ldsl.geo_cd_part
+order by total_recs desc;
+
+
+Use of least 
+
+%sql
+SELECT LEAST(
+(SELECT min(etl_tmst_utc) FROM development.qa_ilm.landing_ndf_delivery_schedule_line_t),
+(SELECT min(etl_tmst_utc) FROM development.qa_ilm.landing_ndf_delivery_item_t),
+(SELECT min(etl_tmst_utc) FROM development.qa_ilm.landing_ndf_delivery_t)
+) AS least_etl_tmst_utc;
+
+Use of min and max
+
+%sql
+select min(latest_processed_stage_tmst),max(latest_processed_stage_tmst) from development.qa_ilm.stage_ndf_delivery_item_t;
+
+
+Select Query on checking multiple condition
+
+%sql
+select
+*
+from
+non_published_domain.ilm.raw_mdi_tx_matrix
+where
+TX_TYPE = 'SHIPMENT'
+AND TX_ID = '420494179563'
+AND MATRIX_ID = '420494302624'
+AND ALT_KEY_TX = '420494179564'
+AND ALT_KEY_MATRIX = '420494302625';
+
+Use of count
+
+%sql
+select count(*) from development.qa_ilm.landing_ndf_delivery_t;
+
+
+Use of not in where condition
+
+%sql
+SELECT count(*)
+FROM development.qa_ilm.landing_ndf_delivery_schedule_line_t
+WHERE delivery_nbr != ''
+AND transaction_delete_ind != 'Y'
+
+Use of limit
+
+%sql
+select * from non_published_domain.ilm.mdi_ptnr limit 2;
+
+See table column name and data type
+
+%sql
+describe non_published_domain.ilm.mdi_ptnr;
+
+Two table primary key compare
+
+%sql
+WITH driving_keys AS (
+SELECT DISTINCT delivery_nbr,
+delivery_item_nbr,
+delivery_create_dt,
+delivery_schedule_line_nbr,
+physical_source_id,
+geo_cd_part
+FROM development.qa_ilm.landing_ndf_delivery_schedule_line_t
+WHERE delivery_nbr != ''
+AND transaction_delete_ind != 'Y'
+),
+stage_keys AS (
+SELECT DISTINCT
+inbound_delivery_header_number AS delivery_nbr,
+inbound_delivery_item_number AS delivery_item_nbr,
+inbound_delivery_header_create_date AS delivery_create_dt,
+inbound_delivery_schedule_line_number AS delivery_schedule_line_nbr,
+physical_source_id,
+geo_cd_part
+FROM development.qa_ilm.stage_ndf_delivery_item_t
+WHERE inbound_delivery_header_number != ''
+AND active_indicator != 0
+)
+SELECT
+(SELECT COUNT(*) FROM driving_keys) AS driving_distinct_stage_grain_pk_cnt,
+(SELECT COUNT(*) FROM stage_keys) AS stage_distinct_pk_cnt,
+(SELECT COUNT(*) FROM driving_keys) - (SELECT COUNT(*) FROM stage_keys) AS driving_minus_stage;
+
+
+Record count based on geo_cd_part from landing(driving) and stage table
+
+%sql
+select
+geo_cd_part,
+'landing_ndf_delivery_schedule_line_t' as table_name,
+count(*) as total_recs
+from
+development.qa_ilm.landing_ndf_delivery_schedule_line_t
+WHERE
+delivery_nbr != ''
+AND transaction_delete_ind != 'Y'
+group by
+geo_cd_part
+union
+select
+geo_cd_part,
+'stage_ndf_delivery_item_t' as table_name,
+count(*) as total_recs
+from
+development.qa_ilm.stage_ndf_delivery_item_t
+WHERE
+inbound_delivery_header_number != ''
+AND active_indicator != 0
+group by
+geo_cd_part
+order by
+1
+
+
+Primary key null and blank check
+
+Total blank record with inbound_delivery_header_number and active_indicator =0('Y') in stage table
+
+%sql
+SELECT COUNT(*) AS null_or_blank_pk_count
+FROM development.qa_ilm.stage_ndf_delivery_item_t
+WHERE inbound_delivery_header_number IS NULL OR inbound_delivery_header_number=''
+   OR inbound_delivery_item_number IS NULL
+   OR inbound_delivery_schedule_line_number IS NULL
+   OR physical_source_id IS NULL
+   OR geo_cd_part IS NULL OR geo_cd_part='' ;
+
+
+PRIMARY KEY UNIQUENESS CHECK
+
+%sql
+SELECT
+inbound_delivery_header_number,
+inbound_delivery_item_number,
+inbound_delivery_schedule_line_number,
+physical_source_id,
+geo_cd_part,
+COUNT(*) AS cnt
+FROM development.qa_ilm.stage_ndf_delivery_item_t
+GROUP BY
+inbound_delivery_header_number,
+inbound_delivery_item_number,
+inbound_delivery_schedule_line_number,
+physical_source_id,
+geo_cd_part
+HAVING COUNT(*) > 1;
+
+
+Row level check ->intersect(common records with delivery_create_dt in join condition)
+
+%sql
+-- deliver_nbr='' is removing
+SELECT 'all_row_matched' AS status, COUNT(*) AS total_recs
+FROM (
+SELECT
+ldsl.delivery_nbr ,
+ldsl.delivery_item_nbr,
+ldsl.delivery_schedule_line_nbr,
+ldsl.physical_source_id,
+ldi.delivery_create_dt,
+ldi.product_cd,
+ldsl.size_cd,
+ldsl.quality_cd,
+ldsl.geo_cd_part,
+ldh.receiving_location_cd,
+CASE WHEN ldsl.physical_source_id = 77 THEN ldsl.po_header_nbr ELSE ldi.po_header_nbr END AS landing_purchase_order_header_number,
+CAST(
+CASE
+WHEN ldsl.physical_source_id = 77 THEN ldsl.po_item_nbr
+ELSE ldi.po_item_nbr
+END AS INT
+) AS landing_purchase_order_item_number,
+CAST(ldsl.po_item_variant_nbr AS INT) AS landing_purchase_order_item_variant_number,
+ldsl.delivery_base_qty,
+ldh.carton_qty,
+ldsl.delivery_gross_wt_kg,
+ldsl.delivery_net_wt_kg,
+ldsl.delivery_vol,
+(
+CASE WHEN COALESCE(ldsl.transaction_delete_ind, 'N') = 'N' THEN 1 ELSE 0 END
+* CASE WHEN COALESCE(ldi.transaction_delete_ind, 'N') = 'N' THEN 1 ELSE 0 END
+* CASE WHEN COALESCE(ldh.transaction_delete_ind, 'N') = 'N' THEN 1 ELSE 0 END
+) AS landing_active_indicator,
+CAST(
+LEAST(ldsl.etl_tmst_utc, ldi.etl_tmst_utc, ldh.etl_tmst_utc) AS TIMESTAMP
+) AS landing_latest_processed_stage_tmst
+FROM
+development.qa_ilm.landing_ndf_delivery_schedule_line_t AS ldsl
+LEFT JOIN development.qa_ilm.landing_ndf_delivery_item_t AS ldi
+ON ldsl.delivery_nbr = ldi.delivery_nbr
+AND ldsl.delivery_item_nbr = ldi.delivery_item_nbr
+AND ldsl.delivery_create_dt = ldi.delivery_create_dt
+AND ldsl.physical_source_id = ldi.physical_source_id
+and ldsl.geo_cd_part = ldi.geo_cd_part
+LEFT JOIN development.qa_ilm.landing_ndf_delivery_t AS ldh
+ON ldi.delivery_nbr = ldh.delivery_nbr
+AND ldi.physical_source_id = ldh.physical_source_id
+and ldi.delivery_create_dt = ldh.delivery_create_dt
+and ldsl.geo_cd_part = ldh.geo_cd_part
+WHERE ldsl.delivery_nbr != ''
+AND ldsl.transaction_delete_ind != 'Y'
+
+INTERSECT
+
+SELECT
+inbound_delivery_header_number,
+inbound_delivery_item_number,
+inbound_delivery_schedule_line_number,
+physical_source_id,
+inbound_delivery_header_create_date,
+product_code,
+size_code,
+quality_code,
+geo_cd_part,
+receiving_location_code,
+purchase_order_header_number,
+purchase_order_item_number,
+purchase_order_item_variant_number,
+inbound_delivery_size_base_quantity,
+header_total_cartons,
+inbound_delivery_size_gross_weight_kg,
+inbound_delivery_size_net_weight_kg,
+inbound_delivery_size_gross_volume,
+active_indicator,
+latest_processed_stage_tmst
+FROM development.qa_ilm.stage_ndf_delivery_item_t
+WHERE
+inbound_delivery_header_number != ''
+AND active_indicator != 0
+) t;
+
+
+Row level check->only in landing
+
+%sql
+-- deliver_nbr='' is removing
+SELECT *
+FROM (
+SELECT
+ldsl.delivery_nbr ,
+ldsl.delivery_item_nbr,
+ldsl.delivery_schedule_line_nbr,
+ldsl.physical_source_id,
+ldi.delivery_create_dt,
+ldi.product_cd,
+ldsl.size_cd,
+ldsl.quality_cd,
+ldsl.geo_cd_part,
+ldh.receiving_location_cd,
+CASE WHEN ldsl.physical_source_id = 77 THEN ldsl.po_header_nbr ELSE ldi.po_header_nbr END AS landing_purchase_order_header_number,
+CAST(
+CASE
+WHEN ldsl.physical_source_id = 77 THEN ldsl.po_item_nbr
+ELSE ldi.po_item_nbr
+END AS INT
+) AS landing_purchase_order_item_number,
+CAST(ldsl.po_item_variant_nbr AS INT) AS landing_purchase_order_item_variant_number,
+ldsl.delivery_base_qty,
+ldh.carton_qty,
+ldsl.delivery_gross_wt_kg,
+ldsl.delivery_net_wt_kg,
+ldsl.delivery_vol,
+(
+CASE WHEN COALESCE(ldsl.transaction_delete_ind, 'N') = 'N' THEN 1 ELSE 0 END
+* CASE WHEN COALESCE(ldi.transaction_delete_ind, 'N') = 'N' THEN 1 ELSE 0 END
+* CASE WHEN COALESCE(ldh.transaction_delete_ind, 'N') = 'N' THEN 1 ELSE 0 END
+) AS landing_active_indicator,
+CAST(
+LEAST(ldsl.etl_tmst_utc, ldi.etl_tmst_utc, ldh.etl_tmst_utc) AS TIMESTAMP
+) AS landing_latest_processed_stage_tmst
+FROM
+development.qa_ilm.landing_ndf_delivery_schedule_line_t AS ldsl
+LEFT JOIN development.qa_ilm.landing_ndf_delivery_item_t AS ldi
+ON ldsl.delivery_nbr = ldi.delivery_nbr
+AND ldsl.delivery_item_nbr = ldi.delivery_item_nbr
+AND ldsl.delivery_create_dt = ldi.delivery_create_dt
+AND ldsl.physical_source_id = ldi.physical_source_id
+and ldsl.geo_cd_part = ldi.geo_cd_part
+LEFT JOIN development.qa_ilm.landing_ndf_delivery_t AS ldh
+ON ldi.delivery_nbr = ldh.delivery_nbr
+AND ldi.physical_source_id = ldh.physical_source_id
+and ldi.delivery_create_dt = ldh.delivery_create_dt
+and ldsl.geo_cd_part = ldh.geo_cd_part
+WHERE ldsl.delivery_nbr != ''
+AND ldsl.transaction_delete_ind != 'Y'
+
+EXCEPT
+
+SELECT
+inbound_delivery_header_number,
+inbound_delivery_item_number,
+inbound_delivery_schedule_line_number,
+physical_source_id,
+inbound_delivery_header_create_date,
+product_code,
+size_code,
+quality_code,
+geo_cd_part,
+receiving_location_code,
+purchase_order_header_number,
+purchase_order_item_number,
+purchase_order_item_variant_number,
+inbound_delivery_size_base_quantity,
+header_total_cartons,
+inbound_delivery_size_gross_weight_kg,
+inbound_delivery_size_net_weight_kg,
+inbound_delivery_size_gross_volume,
+active_indicator,
+latest_processed_stage_tmst
+FROM development.qa_ilm.stage_ndf_delivery_item_t
+WHERE
+inbound_delivery_header_number != ''
+AND active_indicator != 0
+) t;
+
+Row by row data check for integrated table
+
+%sql
+
+WITH arta_delivery_deduped AS (
+SELECT
+inbound_delivery_header_number,
+CAST(inbound_delivery_item_number AS INT) AS inbound_delivery_item_number,
+CAST(inbound_delivery_schedule_line_number AS INT) AS inbound_delivery_schedule_line_number,
+product_code,
+size_code,
+physical_source_id,
+MAX(purchase_order_header_number) AS purchase_order_header_number,
+MAX(CAST(purchase_order_item_number AS INT)) AS purchase_order_item_number,
+MAX(CAST(purchase_order_item_variant_number AS INT)) AS purchase_order_item_variant_number,
+MAX(delivery_shipped_quantity) AS delivery_shipped_quantity,
+MAX(delivery_received_quantity) AS delivery_received_quantity,
+MAX(delivery_reported_volume) AS delivery_reported_volume,
+MAX(reported_delivery_header_gross_weight) AS reported_delivery_header_gross_weight,
+MAX(reported_delivery_header_total_cartons) AS reported_delivery_header_total_cartons,
+MAX(reported_delivery_item_shipped_quantity) AS reported_delivery_item_shipped_quantity,
+MAX(import_code_number) AS import_code_number,
+MAX(latest_processed_stage_tmst) AS arta_cdc_tmst,
+MAX(latest_processed_stage_tmst) AS arta_stage_commit_tmst
+FROM development.qa_ilm.stage_arta_delivery_item_t
+WHERE active_indicator = 1
+GROUP BY
+inbound_delivery_header_number,
+CAST(inbound_delivery_item_number AS INT),
+CAST(inbound_delivery_schedule_line_number AS INT),
+product_code,
+size_code,
+physical_source_id
+),
+rebuild AS (
+SELECT
+stage_ndf_del.inbound_delivery_header_number,
+stage_ndf_del.inbound_delivery_item_number,
+stage_ndf_del.inbound_delivery_schedule_line_number,
+stage_ndf_del.inbound_delivery_header_create_date,
+stage_ndf_del.product_code,
+stage_ndf_del.size_code,
+stage_ndf_del.quality_code,
+stage_ndf_del.geo_cd_part,
+stage_ndf_del.purchase_order_header_number,
+stage_ndf_del.purchase_order_item_number,
+stage_ndf_del.purchase_order_item_variant_number,
+stage_ndf_del.receiving_location_code AS shipping_point_code,
+CAST(stage_ndf_del.inbound_delivery_size_base_quantity AS DECIMAL(38, 0)) AS delivery_quantity,
+CAST(stage_ndf_del.header_total_cartons AS DECIMAL(38, 0)) AS cartons_quantity,
+TRY_CAST(stage_ndf_del.inbound_delivery_size_gross_weight_kg AS DECIMAL(18, 9)) AS delivery_gross_weight,
+TRY_CAST(stage_ndf_del.inbound_delivery_size_net_weight_kg AS DECIMAL(18, 9)) AS delivery_net_weight,
+TRY_CAST(stage_ndf_del.inbound_delivery_size_gross_volume AS DECIMAL(18, 9)) AS delivery_gross_volume,
+-- CAST(stage_ndf_del.inbound_delivery_size_gross_weight_kg AS DECIMAL(20, 5)) AS delivery_gross_weight,
+-- CAST(stage_ndf_del.inbound_delivery_size_net_weight_kg AS DECIMAL(20, 5)) AS delivery_net_weight,
+-- CAST(stage_ndf_del.inbound_delivery_size_gross_volume AS DECIMAL(20, 5)) AS delivery_gross_volume,
+stage_ndf_del.physical_source_id,
+stage_ndf_del.active_indicator,
+stage_arta_del.delivery_reported_volume AS delivery_reported_volume_ar,
+CAST(stage_arta_del.delivery_shipped_quantity AS DECIMAL(38, 0)) AS delivery_total_shipped_quantity_ar,
+CAST(stage_arta_del.delivery_received_quantity AS DECIMAL(38, 0)) AS delivery_total_received_quantity_ar,
+CAST(stage_arta_del.reported_delivery_header_gross_weight AS DECIMAL(38, 2)) AS reported_delivery_header_gross_weight_ar,
+CAST(stage_arta_del.reported_delivery_header_total_cartons AS DECIMAL(38, 0)) AS reported_delivery_header_total_cartons_ar,
+CAST(stage_arta_del.reported_delivery_item_shipped_quantity AS DECIMAL(38, 0)) AS reported_delivery_item_shipped_quantity_ar,
+stage_arta_del.import_code_number AS import_code_number
+FROM development.qa_ilm.stage_ndf_delivery_item_t AS stage_ndf_del
+LEFT JOIN arta_delivery_deduped AS stage_arta_del
+ON stage_ndf_del.inbound_delivery_header_number = stage_arta_del.inbound_delivery_header_number
+AND CASE
+WHEN stage_ndf_del.physical_source_id <> 77 THEN 0
+ELSE stage_ndf_del.inbound_delivery_item_number
+END = stage_arta_del.inbound_delivery_item_number
+AND CASE
+WHEN stage_ndf_del.physical_source_id = 77 THEN 0
+ELSE stage_ndf_del.inbound_delivery_schedule_line_number
+END = stage_arta_del.inbound_delivery_schedule_line_number
+AND stage_ndf_del.physical_source_id = stage_arta_del.physical_source_id
+AND stage_ndf_del.product_code = stage_arta_del.product_code
+AND stage_ndf_del.size_code = stage_arta_del.size_code
+AND stage_ndf_del.purchase_order_header_number = stage_arta_del.purchase_order_header_number
+AND stage_ndf_del.purchase_order_item_number = stage_arta_del.purchase_order_item_number
+AND CASE
+WHEN stage_ndf_del.physical_source_id <> 77 THEN 0
+ELSE stage_ndf_del.purchase_order_item_variant_number
+END = stage_arta_del.purchase_order_item_variant_number
+WHERE
+stage_ndf_del.latest_processed_stage_tmst >= TIMESTAMP '1900-01-01 00:00:00'
+OR stage_arta_del.arta_stage_commit_tmst >= TIMESTAMP '1900-01-01 00:00:00'
+)
+SELECT geo_cd_part, 'temp_table' AS table_name, count(*) AS total_recs FROM rebuild
+WHERE inbound_delivery_header_number != ''
+AND active_indicator != 0
+GROUP BY geo_cd_part
+UNION
+SELECT geo_cd_part, 'integrated_delivery_item_t' AS table_name, count(*) AS total_recs FROM development.dev_ilm.integrated_delivery_item_t
+WHERE inbound_delivery_header_number != ''
+AND active_indicator != 0
+GROUP BY geo_cd_part
+ORDER BY 1
